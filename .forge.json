@@ -1,0 +1,19 @@
+{
+  "forge_version": 1,
+  "profile": "rust",
+  "name": "rv-certcheck",
+  "module": "rv_certcheck",
+  "title": "RV CertCheck",
+  "run_command": "scan",
+  "planned_command": "analyze",
+  "case_role": "analysis",
+  "created": "2026-11-03",
+  "cli_command": [
+    "cargo",
+    "run",
+    "-q",
+    "-p",
+    "rv-certcheck-cli",
+    "--"
+  ]
+}
