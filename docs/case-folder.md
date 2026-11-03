@@ -42,9 +42,9 @@ JSON schemas: [case.schema.json](../schemas/case.schema.json) and [registry.sche
 
 ```bash
 # 1. Open the case and register the evidence (creates case.json; --case and --jurisdiction are needed only now)
-rv-certcheck scan -i D:\evidence -r --case-dir E:\CASE-014 --case CASE-014 --jurisdiction fr
+rv-certcheck analyze -i D:\evidence -r --case-dir E:\CASE-014 --case CASE-014 --jurisdiction fr
 # 2. Re-examine some registered items later (or run an analysis tool with the same --case-dir)
-rv-certcheck scan --case-dir E:\CASE-014 --evidence E0001,E0002
+rv-certcheck analyze --case-dir E:\CASE-014 --evidence E0001,E0002
 # 3. Check the whole case before handing it over
 rv-certcheck verify-case E:\CASE-014
 ```

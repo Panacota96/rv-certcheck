@@ -4,7 +4,7 @@
   "name": "rv-certcheck",
   "module": "rv_certcheck",
   "title": "RV CertCheck",
-  "run_command": "scan",
+  "run_command": "analyze",
   "planned_command": "analyze",
   "case_role": "analysis",
   "created": "2026-11-03",
@@ -15,5 +15,11 @@
     "-p",
     "rv-certcheck-cli",
     "--"
+  ],
+  "sample_args": [
+    "--anchor",
+    "examples/sample/anchors/rakvor-lab-root.crt",
+    "--at",
+    "2026-06-01T00:00:00Z"
   ]
 }

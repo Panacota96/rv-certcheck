@@ -7,7 +7,7 @@ cargo build --workspace                 # debug build of core, CLI and GUI
 cargo test  --workspace                 # unit + integration tests (GUI tests are headless)
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
-cargo run -p rv-certcheck-cli -- scan -i examples/sample/evidence --lang all
+cargo run -p rv-certcheck-cli -- analyze -i examples/sample/evidence --lang all
 cargo run -p rv-certcheck-gui
 ```
 

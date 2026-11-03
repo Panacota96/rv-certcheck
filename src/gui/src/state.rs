@@ -407,6 +407,8 @@ impl GuiState {
             },
             evidence_ids: vec![],
             case_role: CASE_ROLE,
+            // Analyze-tab options (anchors, date, purpose) arrive with the GUI agent; defaults until then.
+            cert: Default::default(),
         })
     }
 

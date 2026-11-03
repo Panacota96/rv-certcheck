@@ -1,0 +1,10 @@
+file	openssl_verify_code	openssl_verify_message
+leaf.crt	0	ok
+leaf-expired.crt	10	certificate has expired
+leaf-not-yet-valid.crt	9	certificate is not yet valid
+leaf-revoked.crt	23	certificate revoked
+leaf-rsa1024.crt	0	ok
+leaf-sha1.crt	0	ok
+leaf-mismatch.crt	0	ok
+leaf-wrong-root.crt	20	unable to get local issuer certificate
+tsa.crt	0	ok

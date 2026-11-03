@@ -139,13 +139,149 @@
       "title": "Le chemin enregistré contient désormais un autre contenu",
       "shows": "Ce chemin a déjà été enregistré comme %{previous_id} avec un autre contenu ; le contenu actuel reçoit un nouvel ID d'élément.",
       "does_not_prove": "Quelle version est l'originale ni pourquoi le contenu a changé."
+    },
+    "CERT_CHAIN_VALID": {
+      "title": "Chaîne de certificats valide à la date vérifiée",
+      "shows": "OpenSSL a construit un chemin de %{subject} jusqu'à l'ancre de confiance %{anchor} et tous les contrôles ont réussi (signatures, validité au %{at}, usage, contraintes et informations de révocation fournies).",
+      "does_not_prove": "Que le titulaire du certificat ait signé ou approuvé un document précis, que l'ancre mérite la confiance (cela relève du choix de --anchor par l'expert), ni que le résultat soit le même à une autre date."
+    },
+    "CERT_CHAIN_UNTRUSTED": {
+      "title": "La chaîne n'aboutit pas à une ancre de confiance",
+      "shows": "Aucun chemin de %{subject} vers les ancres indiquées n'a pu être complété. OpenSSL a signalé à la profondeur %{depth} : %{reason} (code %{code}).",
+      "does_not_prove": "Que le certificat soit falsifié ou invalide : l'autorité émettrice peut simplement ne pas figurer parmi les ancres choisies, ou un certificat intermédiaire peut manquer dans les éléments examinés."
+    },
+    "CERT_SIGNATURE_INVALID": {
+      "title": "La signature du certificat ne se vérifie pas",
+      "shows": "La signature de %{subject} (profondeur %{depth}) ne se vérifie pas avec la clé publique de son émetteur : %{reason}.",
+      "does_not_prove": "Qui a modifié le certificat ni pourquoi ; une copie endommagée ou un certificat attribué au mauvais émetteur donnent le même résultat."
+    },
+    "CERT_EXPIRED_AT_DATE": {
+      "title": "Certificat expiré à la date vérifiée",
+      "shows": "%{subject} était valide jusqu'au %{not_after} ; la chaîne a été vérifiée au %{at}, après cette date.",
+      "does_not_prove": "Qu'une signature faite avec lui soit invalide : pour une signature, seule compte la validité au moment de signer (vérifiez à nouveau avec --at signing-time ou la date de signature). L'expiration d'un ancien certificat est normale."
+    },
+    "CERT_NOT_YET_VALID_AT_DATE": {
+      "title": "Certificat pas encore valide à la date vérifiée",
+      "shows": "%{subject} n'est valide qu'à partir du %{not_before} ; la chaîne a été vérifiée au %{at}, avant cette date.",
+      "does_not_prove": "Que le certificat ait été antidaté ou falsifié ; une valeur --at erronée, une horloge système fausse ou une heure de signature enregistrée dans un autre fuseau produisent le même résultat."
+    },
+    "CERT_REVOKED": {
+      "title": "Certificat révoqué",
+      "shows": "%{subject} (numéro de série %{serial}) est indiqué comme révoqué depuis le %{revoked_at}, motif %{reason}, d'après %{source}.",
+      "does_not_prove": "Que le titulaire ait commis une faute (la révocation suit aussi des changements ordinaires, comme une clé remplacée) ni que les signatures faites avant le %{revoked_at} soient invalides."
+    },
+    "REVOCATION_UNKNOWN": {
+      "title": "Statut de révocation inconnu",
+      "shows": "Aucune CRL ni réponse OCSP couvrant %{subject} n'était disponible pour la date vérifiée (%{source}) ; son statut de révocation n'a pas pu être déterminé.",
+      "does_not_prove": "Que le certificat soit révoqué ni qu'il ne le soit pas ; fournissez la CRL de l'autorité ou une réponse OCSP (--crl, --ocsp) pour trancher."
+    },
+    "CERT_PURPOSE_MISMATCH": {
+      "title": "Certificat non émis pour cet usage",
+      "shows": "%{subject} ne permet pas l'usage %{purpose} : usage de clé %{key_usage}, usage étendu %{eku}.",
+      "does_not_prove": "Que le certificat ait été détourné volontairement ; de nombreux logiciels acceptent ces certificats, et l'usage vérifié est celui choisi avec --purpose."
+    },
+    "CERT_NAME_CONSTRAINT_VIOLATION": {
+      "title": "Nom hors des contraintes de l'autorité émettrice",
+      "shows": "Le nom %{name} de %{subject} sort des noms que %{constraint_by} est autorisée à certifier (contraintes de noms).",
+      "does_not_prove": "Que le certificat soit malveillant ; cela montre seulement qu'une autorité a émis un nom qui lui était interdit, ce qu'OpenSSL rejette."
+    },
+    "CERT_WEAK_KEY": {
+      "title": "Clé publique faible",
+      "shows": "%{subject} utilise une clé %{algorithm} de %{size}, en dessous des minimums actuels (RSA 2048 bits, courbes elliptiques de 256 bits).",
+      "does_not_prove": "Que la clé ait été cassée ni que les signatures faites avec elle soient fausses ; cela montre une résistance aux attaques inférieure à la pratique actuelle."
+    },
+    "CERT_WEAK_SIGNATURE_ALGORITHM": {
+      "title": "Algorithme de signature faible",
+      "shows": "%{subject} est signé avec %{algorithm}, un algorithme de hachage sujet à des attaques par collision connues (MD5, SHA-1).",
+      "does_not_prove": "Que ce certificat ait été falsifié ; cela montre qu'une falsification par collision était réalisable pour un attaquant disposant de moyens, de sorte que le certificat seul mérite moins de poids."
+    },
+    "CERT_SELF_SIGNED": {
+      "title": "Certificat auto-signé",
+      "shows": "%{subject} est signé par sa propre clé (sujet et émetteur identiques) : c'est une racine ou un certificat autonome.",
+      "does_not_prove": "Qu'il ne soit pas fiable ; toute autorité racine est auto-signée. Sa confiance dépend seulement de sa présence parmi les ancres choisies."
+    },
+    "CERT_IN_TRUST_LIST": {
+      "title": "Émetteur inscrit sur une liste de confiance",
+      "shows": "%{subject} appartient au service %{service} inscrit sur %{list} (instantané %{snapshot}) ; son statut au %{at} était %{status}.",
+      "does_not_prove": "Que le certificat ou la signature soit qualifié ou juridiquement valable : cela dépend aussi du type de service, des mentions du certificat et de l'actualité de l'instantané. La signature de la liste elle-même n'est pas vérifiée en v0.1."
+    },
+    "CERT_NOT_IN_TRUST_LIST": {
+      "title": "Absent de la liste de confiance utilisée",
+      "shows": "Aucun certificat de la chaîne de %{subject} n'est l'identité d'un service de %{list} (instantané %{snapshot}).",
+      "does_not_prove": "Que le certificat soit invalide ou non fiable ; la plupart des certificats sont légitimement hors de ces listes, et l'instantané peut être périmé."
+    },
+    "CERT_ISSUED_BY_RAKVOR_INTERNAL": {
+      "title": "Certificat interne Rakvor (usage interne uniquement)",
+      "shows": "%{subject} a été émis par l'ICP interne de Rakvor (politique %{policy}). Il est réservé à l'usage interne de Rakvor : ce n'est pas une firma digital au sens de l'article 28 de la Ley 527 de 1999 (Colombie), Rakvor n'étant pas une entidad de certificación autorisée, ni un certificat qualifié au sens du règlement eIDAS (règlement (UE) n° 910/2014).",
+      "does_not_prove": "Un effet juridique équivalent à une signature manuscrite, ni l'identité d'un signataire au-delà des registres internes de Rakvor ; une signature faite avec lui montre seulement qu'elle a été produite avec une clé émise par Rakvor."
+    },
+    "KEY_MATCHES_CERTIFICATE": {
+      "title": "La clé privée correspond à un certificat",
+      "shows": "La partie publique de la clé privée de %{key} est identique à la clé publique de %{certificates}.",
+      "does_not_prove": "Qui a détenu ou utilisé la clé, ni qu'elle n'a pas été copiée ailleurs ; la clé n'a été utilisée qu'en mémoire et n'est reproduite dans aucun rapport."
+    },
+    "KEY_DOES_NOT_MATCH": {
+      "title": "La clé privée ne correspond pas à son certificat",
+      "shows": "La clé privée de %{key} n'est pas la clé de %{certificate}, le certificat fourni avec elle.",
+      "does_not_prove": "Laquelle est la bonne clé, ni qu'il y ait eu manipulation ; clés et certificats sont souvent confondus lors d'exports ou de renouvellements."
+    },
+    "KEY_NOT_PAIRED": {
+      "title": "Clé privée sans certificat correspondant",
+      "shows": "Aucun certificat examiné lors de cette exécution n'a la clé publique de la clé privée de %{key}.",
+      "does_not_prove": "Que la clé soit étrangère ou suspecte ; son certificat peut simplement ne pas faire partie des éléments examinés."
+    },
+    "TIMESTAMP_TOKEN_VALID": {
+      "title": "Jeton d'horodatage valide",
+      "shows": "Le jeton RFC 3161 indique l'heure %{gen_time} ; sa signature par %{tsa} se vérifie (politique %{policy}, empreinte %{hash_algorithm}) et la chaîne du certificat de l'autorité d'horodatage était valide à ce moment.",
+      "does_not_prove": "Que les données horodatées soient authentiques ni qui les a soumises ; cela prouve seulement que des données ayant cette empreinte existaient à ce moment, dans la mesure où l'on fait confiance à l'autorité et aux ancres choisies."
+    },
+    "TIMESTAMP_TOKEN_INVALID": {
+      "title": "Le jeton d'horodatage ne se vérifie pas",
+      "shows": "Le jeton RFC 3161 n'a pas pu être vérifié : %{reason}.",
+      "does_not_prove": "Que l'heure indiquée soit fausse ni que le jeton ait été falsifié ; un certificat d'horodatage manquant, une ancre non fournie ou une copie endommagée donnent le même résultat."
+    },
+    "PKCS12_UNREADABLE": {
+      "title": "Le fichier PKCS#12 n'a pas pu être ouvert",
+      "shows": "Le magasin PKCS#12 (PFX) n'a pas pu être lu : %{reason}. Seul ce qui est lisible sans mot de passe a été examiné.",
+      "does_not_prove": "Que le fichier soit endommagé ni que son contenu soit suspect ; un mot de passe absent ou erroné, ou un chiffrement ancien, a le même effet. Le mot de passe n'est jamais enregistré."
+    },
+    "CRYPTO_INPUT_NOT_RECOGNISED": {
+      "title": "Objet cryptographique non reconnu",
+      "shows": "Le contenu n'est ni un certificat, ni un lot de certificats, ni un PKCS#7, PKCS#12, une CRL, une réponse OCSP, un jeton d'horodatage, une clé privée ou une CSR (%{kind}) ; seuls les contrôles généraux de fichier ont été appliqués.",
+      "does_not_prove": "Que le fichier soit sans intérêt ou inoffensif ; il n'a simplement pas été analysé comme preuve cryptographique."
+    },
+    "CRYPTO_INPUT_UNPARSABLE": {
+      "title": "Objet cryptographique non décodable",
+      "shows": "Le contenu ressemble à un %{kind} mais n'a pas pu être décodé : %{error}.",
+      "does_not_prove": "Qu'il ait été altéré ; une troncature lors de la copie, un encodage inhabituel ou un format non pris en charge par cette version donnent le même résultat."
+    },
+    "ANALYSIS_NOT_IMPLEMENTED": {
+      "title": "Étape d'analyse non disponible dans cette version",
+      "shows": "L'étape %{operation} n'est pas implémentée dans cette version de développement : l'élément a été haché et enregistré mais pas analysé comme preuve cryptographique.",
+      "does_not_prove": "Quoi que ce soit sur les certificats, clés ou signatures de l'élément ; utilisez une version publiée avant de vous appuyer sur ce rapport."
+    },
+    "EVIDENCE_CHANGED_DURING_READ": {
+      "title": "Le fichier a changé pendant l'examen",
+      "shows": "Les octets analysés ont pour %{algorithm} %{actual}, alors que le même fichier donnait %{expected} quelques instants plus tôt : le fichier a changé pendant l'examen.",
+      "does_not_prove": "Qui ou quoi l'a modifié (autre programme, synchronisation, support défaillant) ; les résultats de l'analyse peuvent ne pas décrire l'élément enregistré."
+    },
+    "ANALYSIS_STEP_FAILED": {
+      "title": "Échec d'une étape de l'analyse",
+      "shows": "L'étape %{operation} s'est arrêtée sur une erreur : %{error}. Les autres résultats de l'élément restent valables, mais cette étape n'a pas donné de réponse.",
+      "does_not_prove": "Quoi que ce soit sur ce que l'étape aurait trouvé ; relancez-la après avoir corrigé la cause (fichier d'ancre absent, format non pris en charge...)."
     }
   },
   "limitations": {
     "SIGNATURE_TABLE_LIMITED": "La détection du type repose sur une table limitée de signatures courantes ; les types inconnus sont signalés comme inconnus, non comme suspects.",
     "TIMESTAMPS_FROM_FILESYSTEM": "Les dates de modification proviennent du système de fichiers de la copie examinée et peuvent différer de la source d'origine.",
     "CLEAN_RESULT_IS_NOT_AUTHENTICITY": "Un résultat sans constatation ne prouve pas qu'un fichier est authentique ni qu'il n'a pas été modifié avant son acquisition.",
-    "TIMESTAMP_PROVES_EXISTENCE_ONLY": "Un horodatage qualifié prouve que le journal d'audit existait sous cette forme exacte à l'heure indiquée ; il ne prouve pas que la copie examinée correspond à la source d'origine."
+    "TIMESTAMP_PROVES_EXISTENCE_ONLY": "Un horodatage qualifié prouve que le journal d'audit existait sous cette forme exacte à l'heure indiquée ; il ne prouve pas que la copie examinée correspond à la source d'origine.",
+    "VALIDATION_IS_AS_OF_THE_DATE_GIVEN": "Chaque chaîne est évaluée à un instant unique (--at, consigné dans chaque rapport) ; un même certificat peut être valide à une date et expiré ou révoqué à une autre.",
+    "OFFLINE_REVOCATION_DEPENDS_ON_SUPPLIED_FILES": "Hors ligne, la révocation n'est vérifiée qu'avec les CRL et réponses OCSP fournies (--crl, --ocsp, ou trouvées parmi les éléments) ; une révocation publiée ailleurs n'est pas vue.",
+    "TRUST_LIST_SNAPSHOT_DATED": "Les listes de confiance sont utilisées sous forme d'instantanés datés (date et SHA-256 consignés) ; les services ajoutés, suspendus ou retirés après l'instantané ne sont pas pris en compte.",
+    "TRUST_LIST_SIGNATURE_NOT_VERIFIED_V01": "En version 0.1, la signature XAdES de la liste de confiance elle-même n'est pas vérifiée ; la source et le SHA-256 de l'instantané sont consignés pour permettre un contrôle indépendant. La liste colombienne est un fichier établi manuellement, l'ONAC ne publiant pas de liste lisible par machine.",
+    "RAKVOR_CERTIFICATES_ARE_INTERNAL_USE": "Les certificats émis par l'ICP interne de Rakvor sont réservés à un usage interne : ils ne constituent pas une firma digital au sens de l'article 28 de la Ley 527 de 1999 (Colombie) et ne sont pas des certificats qualifiés au sens du règlement eIDAS (règlement (UE) n° 910/2014).",
+    "NO_VALIDATED_ERROR_RATES_YET": "Les résultats de l'outil ont été comparés à OpenSSL et à des implémentations de référence en Python sur des jeux d'essai, mais aucun taux d'erreur n'a encore été mesuré sur un corpus validé."
   },
   "brand": {
     "descriptor": "INVESTIGATION NUMÉRIQUE | RÉPONSE AUX INCIDENTS | SÉCURITÉ",

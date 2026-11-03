@@ -1,0 +1,109 @@
+{
+  "schema": "rakvor.sample-expected/1",
+  "comment": "Findings `rv-certcheck analyze` must report for each sample item with --anchor examples/sample/anchors/rakvor-lab-root.crt --at 2026-06-01T00:00:00Z (purpose any). Checked by src/cli/tests/analyze_sample.rs once the certificate layer is implemented. Revocation: REVOCATION_UNKNOWN is raised for the target (depth 0) only; intermediate.crl covers every leaf issued by the intermediate.",
+  "args": [
+    "--anchor",
+    "examples/sample/anchors/rakvor-lab-root.crt",
+    "--at",
+    "2026-06-01T00:00:00Z"
+  ],
+  "items": {
+    "intermediate.crt": {
+      "expected": [
+        "CERT_CHAIN_VALID",
+        "REVOCATION_UNKNOWN"
+      ],
+      "forbidden": [
+        "CERT_CHAIN_UNTRUSTED"
+      ]
+    },
+    "leaf.crt": {
+      "expected": [
+        "CERT_CHAIN_VALID"
+      ],
+      "forbidden": [
+        "REVOCATION_UNKNOWN",
+        "CERT_REVOKED",
+        "CERT_WEAK_KEY"
+      ]
+    },
+    "leaf-expired.crt": {
+      "expected": [
+        "CERT_EXPIRED_AT_DATE"
+      ],
+      "forbidden": [
+        "CERT_CHAIN_VALID"
+      ]
+    },
+    "leaf-revoked.crt": {
+      "expected": [
+        "CERT_REVOKED"
+      ],
+      "forbidden": [
+        "CERT_CHAIN_VALID",
+        "REVOCATION_UNKNOWN"
+      ]
+    },
+    "intermediate.crl": {
+      "expected": [],
+      "forbidden": [
+        "CRYPTO_INPUT_UNPARSABLE",
+        "CRYPTO_INPUT_NOT_RECOGNISED"
+      ]
+    },
+    "leaf-wrong-root.crt": {
+      "expected": [
+        "CERT_CHAIN_UNTRUSTED"
+      ],
+      "forbidden": [
+        "CERT_CHAIN_VALID"
+      ]
+    },
+    "leaf-rsa1024.crt": {
+      "expected": [
+        "CERT_WEAK_KEY"
+      ],
+      "forbidden": []
+    },
+    "leaf-sha1.crt": {
+      "expected": [
+        "CERT_WEAK_SIGNATURE_ALGORITHM"
+      ],
+      "forbidden": []
+    },
+    "leaf-mismatch.crt": {
+      "expected": [
+        "CERT_CHAIN_VALID"
+      ],
+      "forbidden": []
+    },
+    "leaf-mismatch.key": {
+      "expected": [
+        "KEY_DOES_NOT_MATCH"
+      ],
+      "forbidden": [
+        "KEY_MATCHES_CERTIFICATE"
+      ]
+    },
+    "tsa.crt": {
+      "expected": [
+        "CERT_CHAIN_VALID"
+      ],
+      "forbidden": []
+    },
+    "data.tsr": {
+      "expected": [
+        "TIMESTAMP_TOKEN_VALID"
+      ],
+      "forbidden": [
+        "TIMESTAMP_TOKEN_INVALID"
+      ]
+    },
+    "data.txt": {
+      "expected": [
+        "CRYPTO_INPUT_NOT_RECOGNISED"
+      ],
+      "forbidden": []
+    }
+  }
+}

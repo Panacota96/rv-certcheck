@@ -4,15 +4,20 @@
 
 ```mermaid
 flowchart LR
-  A[rv-certcheck] --> B[scan]
+  A[rv-certcheck] --> B[analyze]
   A --> C[verify-log]
   A --> D[self-test]
   A --> T[timestamp]
   A --> V[verify-case]
+  A --> P[pki / csr / lab / keys / tokens]
+  A --> L[trust-list]
   T --> E
   B --> E[(logs/RUN-ID)]
   B --> F[(reports/RUN-ID)]
   B -. --case-dir .-> K[(CASE folder)]
+  P --> CA[(CA folder rakvor.ca/1)]
+  L --> S[(trust-list snapshots)]
+  B -. --anchor tl: .-> S
   V --> K
   C --> E
 ```
@@ -21,25 +26,40 @@ flowchart LR
 
 ```text
 DESCRIPTION:
-  rv-certcheck reviews a single file, a whole folder (bulk) or a list of files. For every file it:
+  rv-certcheck analyzes a single file, a whole folder (bulk) or a list of files. For every file it:
     1. opens the file read-only and hashes it in one pass with one or two algorithms;
-    2. detects the real file type from its signature (magic bytes);
-    3. flags empty files, extensions that do not match the content, programs hidden under
-       another name and duplicated content;
-    4. writes a technical report and a customer-friendly summary (HTML, PDF and JSON).
+    2. recognises its content (not its extension): certificate, PEM bundle, PKCS#7, PKCS#12, CRL,
+       OCSP response, RFC 3161 timestamp token, private key or CSR;
+    3. reads every certificate field, builds and checks each chain with OpenSSL at the date and for
+    the
+       purpose chosen (--at, --purpose) against the anchors chosen (--anchor), checks revocation
+       with the
+       CRLs and OCSP responses supplied, verifies timestamp tokens and matches keys to certificates;
+    4. writes chain.json and certificate.txt, a technical report and a customer-friendly summary.
   Each run also writes a statistics report and an audit trail under <OUT>/logs/<RUN-ID>/.
   Every action is appended to a hash-chained log that `rv-certcheck verify-log` can check later.
+  Offline by default: nothing is fetched from the network.
 
-  CASE FOLDER (--case-dir): Rakvor tools share one folder per case. rv-certcheck is the intake tool:
-  it
-  registers every hashed file in evidence/registry.json (evidence ids E0001, E0002, ...) so later
-  tools
-  can prove they examined bit-identical copies. `rv-certcheck verify-case <CASE>` checks it all.
+  CASE FOLDER (--case-dir): Rakvor tools share one folder per case. rv-certcheck is an analysis
+  tool: it
+  verifies every item against the registry written at intake (evidence ids E0001, E0002, ...), so
+  the
+  report shows it examined bit-identical copies. `rv-certcheck verify-case <CASE>` checks it all.
+
+  CREATION: pki, csr, lab, keys and tokens create Rakvor's internal certificates (internal use only:
+  not a firma digital under Ley 527 de 1999 art. 28, not qualified under eIDAS), CSRs, reproducible
+  lab sets and PKCS#11 keys; trust-list imports EU and Colombian trust lists as dated snapshots.
 
 Usage: rv-certcheck <COMMAND>
 
 Commands:
-  scan         Hash, check and report on a file, a folder or a list of files
+  analyze      Analyze certificates, chains, CRLs, OCSP responses, timestamp tokens, keys and CSRs
+  pki          Rakvor internal PKI: init-root, import, issue, revoke, crl, ocsp-sign
+  csr          Certificate signing requests: new, show
+  lab          Reproducible lab and test certificate sets
+  keys         Private keys: match a key with a certificate
+  tokens       PKCS#11 hardware tokens: list slots, tokens and keys
+  trust-list   EU and Colombian trust lists: import, list, show dated snapshots
   verify-log   Verify an audit log (audit.jsonl): edited, deleted or re-ordered entries, and
                truncation
   self-test    Check every hash algorithm against known-answer test vectors
@@ -57,26 +77,35 @@ Options:
 Run `rv-certcheck <COMMAND> --help` for the options, examples and exit codes of each command.
 ```
 
-## rv-certcheck scan
+## rv-certcheck analyze
 
 ```text
 DESCRIPTION:
-  rv-certcheck reviews a single file, a whole folder (bulk) or a list of files. For every file it:
+  rv-certcheck analyzes a single file, a whole folder (bulk) or a list of files. For every file it:
     1. opens the file read-only and hashes it in one pass with one or two algorithms;
-    2. detects the real file type from its signature (magic bytes);
-    3. flags empty files, extensions that do not match the content, programs hidden under
-       another name and duplicated content;
-    4. writes a technical report and a customer-friendly summary (HTML, PDF and JSON).
+    2. recognises its content (not its extension): certificate, PEM bundle, PKCS#7, PKCS#12, CRL,
+       OCSP response, RFC 3161 timestamp token, private key or CSR;
+    3. reads every certificate field, builds and checks each chain with OpenSSL at the date and for
+    the
+       purpose chosen (--at, --purpose) against the anchors chosen (--anchor), checks revocation
+       with the
+       CRLs and OCSP responses supplied, verifies timestamp tokens and matches keys to certificates;
+    4. writes chain.json and certificate.txt, a technical report and a customer-friendly summary.
   Each run also writes a statistics report and an audit trail under <OUT>/logs/<RUN-ID>/.
   Every action is appended to a hash-chained log that `rv-certcheck verify-log` can check later.
+  Offline by default: nothing is fetched from the network.
 
-  CASE FOLDER (--case-dir): Rakvor tools share one folder per case. rv-certcheck is the intake tool:
-  it
-  registers every hashed file in evidence/registry.json (evidence ids E0001, E0002, ...) so later
-  tools
-  can prove they examined bit-identical copies. `rv-certcheck verify-case <CASE>` checks it all.
+  CASE FOLDER (--case-dir): Rakvor tools share one folder per case. rv-certcheck is an analysis
+  tool: it
+  verifies every item against the registry written at intake (evidence ids E0001, E0002, ...), so
+  the
+  report shows it examined bit-identical copies. `rv-certcheck verify-case <CASE>` checks it all.
 
-Usage: rv-certcheck scan [OPTIONS]
+  CREATION: pki, csr, lab, keys and tokens create Rakvor's internal certificates (internal use only:
+  not a firma digital under Ley 527 de 1999 art. 28, not qualified under eIDAS), CSRs, reproducible
+  lab sets and PKCS#11 keys; trust-list imports EU and Colombian trust lists as dated snapshots.
+
+Usage: rv-certcheck analyze [OPTIONS]
 
 Options:
   -i, --input <PATH>
@@ -179,34 +208,89 @@ Options:
           Default: none (the --input files, or every registered item)
           Example: --evidence E0001,E0007
 
+      --anchor <ANCHOR>
+          Trust anchor: certificates to trust. Repeat for several. A FILE (PEM, DER or PKCS#7),
+          `rakvor`
+          (the bundled Rakvor internal root), `system` (the operating system's store), or a
+          trust-list
+          snapshot `tl:eu@SNAPSHOT` / `tl:co@SNAPSHOT` (`latest` = newest; see `trust-list list`).
+          Default: none (nothing is trusted: chains are built and checked, and reported untrusted)
+          Example: --anchor roots/ca-root.pem --anchor tl:eu@latest
+
+      --at <WHEN>
+          Instant the chains are judged at: now, signing-time (the token's or signature's time), a
+          date
+          (YYYY-MM-DD, midnight UTC) or an RFC 3339 time.
+          Default: now
+          Example: --at 2025-03-14   or   --at 2025-03-14T09:30:00-05:00   or   --at signing-time
+
+      --purpose <PURPOSE>
+          Purpose checked against key usage and extended key usage: any, tls-server, tls-client,
+          code-signing, document-signing, email, timestamping.
+          Default: any
+          Example: --purpose document-signing
+
+      --crl <FILE>
+          CRL file (DER or PEM) used for revocation, in addition to the CRLs among the evidence.
+          Repeatable.
+          Each file is hashed and recorded in the audit log.
+          Default: none
+          Example: --crl ca-2025-03.crl
+
+      --ocsp <FILE>
+          OCSP response file (DER) used for revocation, in addition to those among the evidence.
+          Repeatable.
+          Default: none
+          Example: --ocsp signer-2025-03-14.ocsp
+
+      --online
+          Fetch CRLs and OCSP responses from the URLs in the certificates (every URL, response hash
+          and
+          time is audited). Not available in this build: supply --crl / --ocsp files instead.
+          Default: off (offline)
+          Example: --online
+
+      --p12-pass-env <VAR>
+          Environment variable holding the password of PKCS#12 items and encrypted keys (never
+          logged).
+          Default: RV_P12_PASSWORD (when unset, PKCS#12 items are read without a password)
+          Example: --p12-pass-env CASE_P12_PASS
+
   -h, --help
           Print help (see a summary with '-h')
 
 EXAMPLES:
-  Review one file (SHA-256, English reports):
-    rv-certcheck scan --input evidence/contract.pdf
-  Review a folder and its subfolders with SHA-256 + MD5, Spanish reports, for case CASE-2026-014:
-    rv-certcheck scan -i D:\evidence -r --hash sha256,md5 --lang es --case CASE-2026-014
-  Review the files listed in a text file, reports in the three languages, machine-readable progress:
-    rv-certcheck scan --input-list files.txt --lang all --progress jsonl > events.jsonl
+  Analyze one certificate against a root you trust, today, for any purpose:
+    rv-certcheck analyze --input evidence/signer.cer --anchor roots/ca-root.pem
+  A folder of certificates, CRLs and tokens, judged at the signing date, for document signing:
+    rv-certcheck analyze -i D:\evidence -r --anchor roots/ca-root.pem --at 2025-03-14 --purpose
+    document-signing
+  With revocation information supplied offline, Spanish reports, case CASE-2026-014:
+    rv-certcheck analyze -i D:\evidence --anchor roots/ca-root.pem --crl ca.crl --ocsp leaf.ocsp
+    --lang es --case CASE-2026-014
+  Against the EU trust list snapshot imported earlier (rv-certcheck trust-list import):
+    rv-certcheck analyze -i D:\evidence --anchor tl:eu@latest
   Verify the audit log afterwards:
     rv-certcheck verify-log rakvor-out/logs/<RUN-ID>/audit.jsonl
-  Open a case folder and register the evidence (intake), then verify the whole case:
-    rv-certcheck scan -i D:\evidence -r --case-dir E:\CASE-014 --case CASE-014 --jurisdiction fr
+  Analyze the evidence registered in a case folder (intake by rv-hashinv), then verify the whole
+  case:
+    rv-certcheck analyze --case-dir E:\CASE-014 --anchor roots/ca-root.pem
     rv-certcheck verify-case E:\CASE-014
   Re-examine two registered items of the case:
-    rv-certcheck scan --case-dir E:\CASE-014 --evidence E0001,E0002
+    rv-certcheck analyze --case-dir E:\CASE-014 --evidence E0001,E0002
 
 EXIT CODES:
   0    Completed; no high-severity finding.
   1    Runtime error (input not found, output not writable, case log locked, ...).
        See the audit log.
-  2    Usage error (unknown option, more than two hash algorithms, unsupported language).
+  2    Usage error (unknown option, more than two hash algorithms, unsupported language, bad
+       --anchor/--at/--purpose value, --online in this build).
        With --case-dir: folder of another case or schema, --case missing when creating the
        case, unknown evidence id.
-  3    Completed with at least one high-severity finding (e.g. unreadable file, program under
-       another name, evidence that differs from the case registry), or the case folder fails
-       verification (nothing is written to it).
+  3    Completed with at least one high-severity finding (e.g. untrusted or invalid chain, revoked
+       or expired certificate, key that does not match, invalid timestamp token, evidence that
+       differs from the case registry), or the case folder fails verification (nothing is
+       written to it).
   130  Cancelled with Ctrl+C. Partial reports and the cancellation are written to the audit log.
 
 FILES WRITTEN:
@@ -217,6 +301,12 @@ FILES WRITTEN:
   <OUT>/logs/<RUN-ID>/environment.json    Tool and dependency versions, OS, host, user, command
   line.
   <OUT>/reports/<RUN-ID>/statistics.json  Run statistics (+ statistics.<LANG>.html and .pdf).
+  <OUT>/reports/<RUN-ID>/items/<NNNNN>-<NAME>/chain.json        Chain per end-entity certificate,
+  per-depth
+                                                                OpenSSL code and reason, revocation,
+                                                                trust list.
+  <OUT>/reports/<RUN-ID>/items/<NNNNN>-<NAME>/certificate.txt   OpenSSL-style dump of every
+  certificate.
   <OUT>/reports/<RUN-ID>/items/<NNNNN>-<NAME>/technical.json|.<LANG>.html|.<LANG>.pdf   Technical
   review.
   <OUT>/reports/<RUN-ID>/items/<NNNNN>-<NAME>/summary.json|.<LANG>.html|.<LANG>.pdf     Customer
@@ -228,7 +318,8 @@ FILES WRITTEN:
   <CASE>/case.json                        Case id, jurisdiction, creation (written once).
   <CASE>/case-log.jsonl                   Hash-chained case log of every tool: case_created,
                                           run_started, evidence_registered, run_finished.
-  <CASE>/evidence/registry.json|.csv      Evidence registry: E0001..., path, size, hashes.
+  <CASE>/evidence/registry.json|.csv      Evidence registry (written at intake): E0001..., path,
+  hashes.
 
 FORENSIC NOTES:
   - Evidence is opened read-only and never modified; modification times are compared before and
@@ -239,6 +330,9 @@ FORENSIC NOTES:
     kept outside the log: the RFC 3161 timestamp or, with --case-dir, the case log. Keep the log
     folder with the reports.
   - A file without findings is not proven authentic; read the Limitations section of each report.
+  - A chain is judged at one instant (--at): an expired certificate can be normal for an old
+    signature, whose validity matters at signing time. Offline, revocation is only as complete as
+    the CRLs and OCSP responses supplied. Private keys and passwords never reach a log or report.
   - MD5 and SHA-1 are accepted for compatibility with older case files; pair them with SHA-256 or
   BLAKE3.
   - The chain head is timestamped by an RFC 3161 authority (proves when the log existed). Offline?
@@ -251,6 +345,632 @@ FORENSIC NOTES:
     older than 10 minutes is reported as stale and never deleted automatically.
   - Each run's audit.jsonl records case_linked (the case-log entry it started from); the case
     log records the run's final audit head, so the two chains vouch for each other.
+```
+
+## rv-certcheck pki
+
+```text
+Rakvor internal PKI: init-root, import, issue, revoke, crl, ocsp-sign
+
+Usage: rv-certcheck pki <COMMAND>
+
+Commands:
+  init-root  Create an offline root CA (key on a token with --confirm-root, else in an encrypted
+             file)
+  import     Bring an existing CA certificate and its key under management (e.g. the code-signing
+             root)
+  issue      Issue a certificate with a profile: intermediate, code-signing, examiner, tsa,
+             tls-server (client-internal is disabled until the CP/CPS exists)
+  revoke     Revoke an issued certificate (takes effect in the next CRL / OCSP response)
+  crl        Sign a CRL with every revoked serial
+  ocsp-sign  Sign an OCSP response for a serial at a given time (lab use; there is no OCSP server)
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help
+```
+
+### rv-certcheck pki init-root
+
+```text
+Create an offline root CA (key on a token with --confirm-root, else in an encrypted file)
+
+Usage: rv-certcheck pki init-root [OPTIONS] --ca <DIR> --ca-id <ID>
+
+Options:
+      --ca <DIR>
+          CA folder to create (must be empty or missing).
+          Example: --ca E:\rakvor-pki\root-2026
+
+      --ca-id <ID>
+          Short id of the CA, used in file names and audit entries.
+          Example: --ca-id rakvor-root-2026
+
+      --subject <DN>
+          Subject as comma-separated attributes in order (C, ST, L, O, OU, CN, emailAddress,
+          serialNumber).
+          Default: none (required, except when issuing from a CSR)
+          Example: --subject "C=CO,O=Rakvor,CN=Ana Ruiz"
+
+      --san <TYPE:VALUE>
+          Subject alternative name, repeatable: dns:NAME, ip:ADDRESS, email:ADDRESS, uri:URI.
+          Default: none
+          Example: --san dns:lab.rakvor.local --san email:ana.ruiz@rakvor.co
+
+      --key-type <TYPE>
+          Key type: rsa-2048, rsa-3072, rsa-4096, p-256, p-384, ed25519.
+          Default: rsa-4096
+          Example: --key-type p-384
+
+      --key-file <FILE>
+          Encrypted key file (PKCS#8, created owner-only, never overwritten).
+          Default: keys/<name>.key.p8 inside the CA folder
+          Example: --key-file keys/examiner.key.p8
+
+      --pass-env <VAR>
+          Environment variable holding the key-file password (never logged; prompted when unset).
+          Default: RV_KEY_PASSWORD
+          Example: --pass-env ROOT_KEY_PASS
+
+      --pkcs11-module <LIB>
+          PKCS#11 module of the token (vendor library). With it the key lives on the token.
+          Default: none (encrypted key file)
+          Example: --pkcs11-module "C:\Program Files\Yubico\Yubico PIV Tool\bin\libykcs11.dll"
+
+      --token-serial <SERIAL>
+          Serial number of the token to use (see `tokens list`).
+          Default: none (required with --pkcs11-module)
+          Example: --token-serial 0012345678
+
+      --key-label <LABEL>
+          Label of the key on the token (new keys) or CKA_ID in hex (existing keys: --key-id).
+          Default: the CA id or certificate name
+          Example: --key-label rakvor-root-2026
+
+      --key-id <HEX>
+          CKA_ID (hex) of an existing key on the token.
+          Default: none
+          Example: --key-id 01
+
+      --pin-env <VAR>
+          Environment variable holding the token PIN (never logged; prompted when unset).
+          Default: RV_TOKEN_PIN
+          Example: --pin-env YUBIKEY_PIN
+
+      --validity-days <DAYS>
+          Validity in days.
+          Default: 7300 (20 years)
+          Example: --validity-days 3650
+
+      --confirm-root
+          Required to create a root key on a token (a lost or exposed root key puts every Rakvor
+          signature in doubt: follow the key ceremony in docs/installation.md)
+
+      --actor <NAME>
+          Name written in the issued-certificate log. Default: the operating-system user name
+
+  -h, --help
+          Print help
+```
+
+### rv-certcheck pki import
+
+```text
+Bring an existing CA certificate and its key under management (e.g. the code-signing root)
+
+Usage: rv-certcheck pki import [OPTIONS] --ca <DIR> --ca-id <ID> --cert <FILE>
+
+Options:
+      --ca <DIR>
+          CA folder to create
+
+      --ca-id <ID>
+          Short id of the CA. Example: --ca-id rakvor-code-signing-root
+
+      --cert <FILE>
+          The CA certificate (PEM or DER). Example: --cert
+          packaging/signing/rakvor-code-signing-root.cer
+
+      --key-file <FILE>
+          Encrypted key file (PKCS#8, created owner-only, never overwritten).
+          Default: keys/<name>.key.p8 inside the CA folder
+          Example: --key-file keys/examiner.key.p8
+
+      --pass-env <VAR>
+          Environment variable holding the key-file password (never logged; prompted when unset).
+          Default: RV_KEY_PASSWORD
+          Example: --pass-env ROOT_KEY_PASS
+
+      --pkcs11-module <LIB>
+          PKCS#11 module of the token (vendor library). With it the key lives on the token.
+          Default: none (encrypted key file)
+          Example: --pkcs11-module "C:\Program Files\Yubico\Yubico PIV Tool\bin\libykcs11.dll"
+
+      --token-serial <SERIAL>
+          Serial number of the token to use (see `tokens list`).
+          Default: none (required with --pkcs11-module)
+          Example: --token-serial 0012345678
+
+      --key-label <LABEL>
+          Label of the key on the token (new keys) or CKA_ID in hex (existing keys: --key-id).
+          Default: the CA id or certificate name
+          Example: --key-label rakvor-root-2026
+
+      --key-id <HEX>
+          CKA_ID (hex) of an existing key on the token.
+          Default: none
+          Example: --key-id 01
+
+      --pin-env <VAR>
+          Environment variable holding the token PIN (never logged; prompted when unset).
+          Default: RV_TOKEN_PIN
+          Example: --pin-env YUBIKEY_PIN
+
+      --actor <NAME>
+          Name written in the issued-certificate log. Default: the operating-system user name
+
+  -h, --help
+          Print help
+```
+
+### rv-certcheck pki issue
+
+```text
+Issue a certificate with a profile: intermediate, code-signing, examiner, tsa, tls-server
+(client-internal is disabled until the CP/CPS exists)
+
+Usage: rv-certcheck pki issue [OPTIONS] --ca <DIR> --profile <PROFILE>
+
+Options:
+      --ca <DIR>
+          CA folder that signs
+
+      --profile <PROFILE>
+          Profile. Example: --profile examiner
+
+      --subject <DN>
+          Subject as comma-separated attributes in order (C, ST, L, O, OU, CN, emailAddress,
+          serialNumber).
+          Default: none (required, except when issuing from a CSR)
+          Example: --subject "C=CO,O=Rakvor,CN=Ana Ruiz"
+
+      --san <TYPE:VALUE>
+          Subject alternative name, repeatable: dns:NAME, ip:ADDRESS, email:ADDRESS, uri:URI.
+          Default: none
+          Example: --san dns:lab.rakvor.local --san email:ana.ruiz@rakvor.co
+
+      --csr <FILE>
+          Issue for this CSR (its key and subject) instead of generating a key
+
+      --key-type <TYPE>
+          Key type of the new key (ignored with --csr). Default: rsa-3072
+
+      --key-file <FILE>
+          Encrypted key file (PKCS#8, created owner-only, never overwritten).
+          Default: keys/<name>.key.p8 inside the CA folder
+          Example: --key-file keys/examiner.key.p8
+
+      --pass-env <VAR>
+          Environment variable holding the key-file password (never logged; prompted when unset).
+          Default: RV_KEY_PASSWORD
+          Example: --pass-env ROOT_KEY_PASS
+
+      --pkcs11-module <LIB>
+          PKCS#11 module of the token (vendor library). With it the key lives on the token.
+          Default: none (encrypted key file)
+          Example: --pkcs11-module "C:\Program Files\Yubico\Yubico PIV Tool\bin\libykcs11.dll"
+
+      --token-serial <SERIAL>
+          Serial number of the token to use (see `tokens list`).
+          Default: none (required with --pkcs11-module)
+          Example: --token-serial 0012345678
+
+      --key-label <LABEL>
+          Label of the key on the token (new keys) or CKA_ID in hex (existing keys: --key-id).
+          Default: the CA id or certificate name
+          Example: --key-label rakvor-root-2026
+
+      --key-id <HEX>
+          CKA_ID (hex) of an existing key on the token.
+          Default: none
+          Example: --key-id 01
+
+      --pin-env <VAR>
+          Environment variable holding the token PIN (never logged; prompted when unset).
+          Default: RV_TOKEN_PIN
+          Example: --pin-env YUBIKEY_PIN
+
+      --ca-pass-env <VAR>
+          Environment variable with the CA key password or PIN. Default: RV_CA_PASSWORD
+
+      --p12-pass-env <VAR>
+          Examiner profile: environment variable with the password of the .p12 written. Default:
+          RV_P12_PASSWORD
+
+      --validity-days <DAYS>
+          Validity in days. Default: 825
+
+      --actor <NAME>
+          Name written in the issued-certificate log. Default: the operating-system user name
+
+  -h, --help
+          Print help
+```
+
+### rv-certcheck pki revoke
+
+```text
+Revoke an issued certificate (takes effect in the next CRL / OCSP response)
+
+Usage: rv-certcheck pki revoke [OPTIONS] --ca <DIR> --serial <HEX>
+
+Options:
+      --ca <DIR>
+          
+
+      --serial <HEX>
+          Serial number in hex. Example: --serial 5f3a...
+
+      --reason <REASON>
+          RFC 5280 reason (keyCompromise, superseded, cessationOfOperation, ...). Default:
+          unspecified
+
+      --at <TIME>
+          Revocation time (RFC 3339). Default: now
+
+      --actor <NAME>
+          
+
+  -h, --help
+          Print help
+```
+
+### rv-certcheck pki crl
+
+```text
+Sign a CRL with every revoked serial
+
+Usage: rv-certcheck pki crl [OPTIONS] --ca <DIR>
+
+Options:
+      --ca <DIR>
+          
+
+      --ca-pass-env <VAR>
+          Environment variable with the CA key password or PIN. Default: RV_CA_PASSWORD
+
+      --next-update-days <DAYS>
+          Days until nextUpdate. Default: 30
+
+      --this-update <TIME>
+          thisUpdate (RFC 3339). Default: now
+
+      --actor <NAME>
+          
+
+  -h, --help
+          Print help
+```
+
+### rv-certcheck pki ocsp-sign
+
+```text
+Sign an OCSP response for a serial at a given time (lab use; there is no OCSP server)
+
+Usage: rv-certcheck pki ocsp-sign [OPTIONS] --ca <DIR> --serial <HEX> --out <FILE>
+
+Options:
+      --ca <DIR>
+          
+
+      --serial <HEX>
+          
+
+      --out <FILE>
+          Output file (DER). Example: --out leaf.ocsp
+
+      --produced-at <TIME>
+          producedAt / thisUpdate (RFC 3339). Default: now
+
+      --next-update-days <DAYS>
+          Days until nextUpdate. Default: none
+
+      --ca-pass-env <VAR>
+          
+
+      --actor <NAME>
+          
+
+  -h, --help
+          Print help
+```
+
+## rv-certcheck csr
+
+```text
+Certificate signing requests: new, show
+
+Usage: rv-certcheck csr <COMMAND>
+
+Commands:
+  new   Create a key (token or encrypted file) and a CSR for a public or qualified CA
+  show  Display a CSR and check its self-signature
+  help  Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help
+```
+
+### rv-certcheck csr new
+
+```text
+Create a key (token or encrypted file) and a CSR for a public or qualified CA
+
+Usage: rv-certcheck csr new [OPTIONS] --out <FILE>
+
+Options:
+      --subject <DN>
+          Subject as comma-separated attributes in order (C, ST, L, O, OU, CN, emailAddress,
+          serialNumber).
+          Default: none (required, except when issuing from a CSR)
+          Example: --subject "C=CO,O=Rakvor,CN=Ana Ruiz"
+
+      --san <TYPE:VALUE>
+          Subject alternative name, repeatable: dns:NAME, ip:ADDRESS, email:ADDRESS, uri:URI.
+          Default: none
+          Example: --san dns:lab.rakvor.local --san email:ana.ruiz@rakvor.co
+
+      --key-type <TYPE>
+          Key type. Default: rsa-3072
+
+      --key-file <FILE>
+          Encrypted key file (PKCS#8, created owner-only, never overwritten).
+          Default: keys/<name>.key.p8 inside the CA folder
+          Example: --key-file keys/examiner.key.p8
+
+      --pass-env <VAR>
+          Environment variable holding the key-file password (never logged; prompted when unset).
+          Default: RV_KEY_PASSWORD
+          Example: --pass-env ROOT_KEY_PASS
+
+      --pkcs11-module <LIB>
+          PKCS#11 module of the token (vendor library). With it the key lives on the token.
+          Default: none (encrypted key file)
+          Example: --pkcs11-module "C:\Program Files\Yubico\Yubico PIV Tool\bin\libykcs11.dll"
+
+      --token-serial <SERIAL>
+          Serial number of the token to use (see `tokens list`).
+          Default: none (required with --pkcs11-module)
+          Example: --token-serial 0012345678
+
+      --key-label <LABEL>
+          Label of the key on the token (new keys) or CKA_ID in hex (existing keys: --key-id).
+          Default: the CA id or certificate name
+          Example: --key-label rakvor-root-2026
+
+      --key-id <HEX>
+          CKA_ID (hex) of an existing key on the token.
+          Default: none
+          Example: --key-id 01
+
+      --pin-env <VAR>
+          Environment variable holding the token PIN (never logged; prompted when unset).
+          Default: RV_TOKEN_PIN
+          Example: --pin-env YUBIKEY_PIN
+
+      --out <FILE>
+          CSR file to write (PEM). Example: --out ana-ruiz.csr
+
+  -h, --help
+          Print help
+```
+
+### rv-certcheck csr show
+
+```text
+Display a CSR and check its self-signature
+
+Usage: rv-certcheck csr show <FILE>
+
+Arguments:
+  <FILE>
+          The CSR (PEM or DER)
+
+Options:
+  -h, --help
+          Print help
+```
+
+## rv-certcheck lab
+
+```text
+Reproducible lab and test certificate sets
+
+Usage: rv-certcheck lab <COMMAND>
+
+Commands:
+  make  Write a reproducible lab set and its expected_findings.json
+  help  Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help
+```
+
+### rv-certcheck lab make
+
+```text
+Write a reproducible lab set and its expected_findings.json
+
+Usage: rv-certcheck lab make [OPTIONS] --out <DIR>
+
+Options:
+      --set <NAME>
+          Set name: full or minimal. Default: full
+
+      --seed <N>
+          Seed (same seed = byte-identical set). Default: 1
+
+      --base-time <TIME>
+          Reference time for every validity period. Default: 2026-01-01T00:00:00Z
+
+      --out <DIR>
+          Output folder (empty or missing). Example: --out lab-full-1
+
+  -h, --help
+          Print help
+```
+
+## rv-certcheck keys
+
+```text
+Private keys: match a key with a certificate
+
+Usage: rv-certcheck keys <COMMAND>
+
+Commands:
+  match  Check whether a private key belongs to a certificate (the key never leaves memory)
+  help   Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help
+```
+
+### rv-certcheck keys match
+
+```text
+Check whether a private key belongs to a certificate (the key never leaves memory)
+
+Usage: rv-certcheck keys match [OPTIONS] <KEY> <CERT>
+
+Arguments:
+  <KEY>
+          Private key (PEM/DER, PKCS#8/PKCS#1/SEC1) or PKCS#12
+
+  <CERT>
+          Certificate (PEM or DER)
+
+Options:
+      --pass-env <VAR>
+          Environment variable with the key or PKCS#12 password. Default: RV_KEY_PASSWORD
+
+  -h, --help
+          Print help
+```
+
+## rv-certcheck tokens
+
+```text
+PKCS#11 hardware tokens: list slots, tokens and keys
+
+Usage: rv-certcheck tokens <COMMAND>
+
+Commands:
+  list  List PKCS#11 slots, tokens and (after login) keys
+  help  Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help
+```
+
+### rv-certcheck tokens list
+
+```text
+List PKCS#11 slots, tokens and (after login) keys
+
+Usage: rv-certcheck tokens list --pkcs11-module <LIB>
+
+Options:
+      --pkcs11-module <LIB>
+          PKCS#11 module (vendor library). Example: --pkcs11-module /usr/lib/softhsm/libsofthsm2.so
+
+  -h, --help
+          Print help
+```
+
+## rv-certcheck trust-list
+
+```text
+EU and Colombian trust lists: import, list, show dated snapshots
+
+Usage: rv-certcheck trust-list <COMMAND>
+
+Commands:
+  import  Import a trust list as a dated, hashed snapshot: eu (LOTL/TL XML) or co (curated CSV)
+  list    List stored snapshots, newest first
+  show    Show one snapshot (services, status history)
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help
+```
+
+### rv-certcheck trust-list import
+
+```text
+Import a trust list as a dated, hashed snapshot: eu (LOTL/TL XML) or co (curated CSV)
+
+Usage: rv-certcheck trust-list import [OPTIONS] --list <LIST> <FILE>
+
+Arguments:
+  <FILE>
+          The XML or CSV file
+
+Options:
+      --list <LIST>
+          eu or co
+          
+          [possible values: eu, co]
+
+      --store <DIR>
+          Snapshot folder. Default: the tool's data folder (RV_CERTCHECK_DATA overrides)
+
+  -h, --help
+          Print help
+```
+
+### rv-certcheck trust-list list
+
+```text
+List stored snapshots, newest first
+
+Usage: rv-certcheck trust-list list [OPTIONS]
+
+Options:
+      --store <DIR>
+          
+
+  -h, --help
+          Print help
+```
+
+### rv-certcheck trust-list show
+
+```text
+Show one snapshot (services, status history)
+
+Usage: rv-certcheck trust-list show [OPTIONS] --list <LIST> <ID>
+
+Arguments:
+  <ID>
+          Snapshot id or latest
+
+Options:
+      --list <LIST>
+          eu or co
+          
+          [possible values: eu, co]
+
+      --store <DIR>
+          
+
+  -h, --help
+          Print help
 ```
 
 ## rv-certcheck verify-log

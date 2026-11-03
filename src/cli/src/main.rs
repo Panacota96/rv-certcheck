@@ -1,12 +1,16 @@
-//! rv-certcheck command-line interface. All work happens in `rv_certcheck_core`; this file only
-//! parses arguments, renders events (progress bar or JSON Lines) and maps results to exit codes.
+//! rv-certcheck command-line interface. All work happens in `rv_certcheck_core` and the certificate layer
+//! (`rv_certcheck_certs`); this file only parses arguments, renders events (progress bar or JSON Lines) and maps
+//! results to exit codes. The creation commands (pki, csr, lab, keys, tokens, trust-list) live in `commands.rs`.
+
+mod commands;
 
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
+use rv_certcheck_core::certs::{AnchorSpec, AtTime, Purpose, Secret, ValidationOptions};
 use rv_certcheck_core::trust::{self, DEFAULT_TSA};
 use rv_certcheck_core::{
-    CASE_ROLE, Event, HashAlgo, RunConfig, TOOL_NAME, TOOL_VERSION, audit, case, hash, i18n, run,
-    verify,
+    CASE_ROLE, CertOptions, Event, HashAlgo, RunConfig, TOOL_NAME, TOOL_VERSION, audit, case, hash,
+    i18n, run, verify,
 };
 use std::io::Write;
 use std::path::PathBuf;
@@ -20,49 +24,60 @@ const EXIT_USAGE: u8 = 2;
 const EXIT_FINDINGS: u8 = 3;
 const EXIT_CANCELLED: u8 = 130;
 
-const ABOUT: &str = "Inventory digital evidence: hash every file with one or two algorithms, detect its real type, flag anomalies and write court-ready reports with a tamper-evident audit log.";
+const ABOUT: &str = "Analyze certificates and other cryptographic evidence (chains, revocation, timestamps, keys) and create Rakvor's internal certificates, with court-ready reports and a tamper-evident audit log.";
 
 const LONG_ABOUT: &str = "\
 DESCRIPTION:
-  rv-certcheck reviews a single file, a whole folder (bulk) or a list of files. For every file it:
+  rv-certcheck analyzes a single file, a whole folder (bulk) or a list of files. For every file it:
     1. opens the file read-only and hashes it in one pass with one or two algorithms;
-    2. detects the real file type from its signature (magic bytes);
-    3. flags empty files, extensions that do not match the content, programs hidden under
-       another name and duplicated content;
-    4. writes a technical report and a customer-friendly summary (HTML, PDF and JSON).
+    2. recognises its content (not its extension): certificate, PEM bundle, PKCS#7, PKCS#12, CRL,
+       OCSP response, RFC 3161 timestamp token, private key or CSR;
+    3. reads every certificate field, builds and checks each chain with OpenSSL at the date and for the
+       purpose chosen (--at, --purpose) against the anchors chosen (--anchor), checks revocation with the
+       CRLs and OCSP responses supplied, verifies timestamp tokens and matches keys to certificates;
+    4. writes chain.json and certificate.txt, a technical report and a customer-friendly summary.
   Each run also writes a statistics report and an audit trail under <OUT>/logs/<RUN-ID>/.
   Every action is appended to a hash-chained log that `rv-certcheck verify-log` can check later.
+  Offline by default: nothing is fetched from the network.
 
-  CASE FOLDER (--case-dir): Rakvor tools share one folder per case. rv-certcheck is the intake tool: it
-  registers every hashed file in evidence/registry.json (evidence ids E0001, E0002, ...) so later tools
-  can prove they examined bit-identical copies. `rv-certcheck verify-case <CASE>` checks it all.";
+  CASE FOLDER (--case-dir): Rakvor tools share one folder per case. rv-certcheck is an analysis tool: it
+  verifies every item against the registry written at intake (evidence ids E0001, E0002, ...), so the
+  report shows it examined bit-identical copies. `rv-certcheck verify-case <CASE>` checks it all.
 
-const SCAN_AFTER_HELP: &str = "\
+  CREATION: pki, csr, lab, keys and tokens create Rakvor's internal certificates (internal use only:
+  not a firma digital under Ley 527 de 1999 art. 28, not qualified under eIDAS), CSRs, reproducible
+  lab sets and PKCS#11 keys; trust-list imports EU and Colombian trust lists as dated snapshots.";
+
+const ANALYZE_AFTER_HELP: &str = "\
 EXAMPLES:
-  Review one file (SHA-256, English reports):
-    rv-certcheck scan --input evidence/contract.pdf
-  Review a folder and its subfolders with SHA-256 + MD5, Spanish reports, for case CASE-2026-014:
-    rv-certcheck scan -i D:\\evidence -r --hash sha256,md5 --lang es --case CASE-2026-014
-  Review the files listed in a text file, reports in the three languages, machine-readable progress:
-    rv-certcheck scan --input-list files.txt --lang all --progress jsonl > events.jsonl
+  Analyze one certificate against a root you trust, today, for any purpose:
+    rv-certcheck analyze --input evidence/signer.cer --anchor roots/ca-root.pem
+  A folder of certificates, CRLs and tokens, judged at the signing date, for document signing:
+    rv-certcheck analyze -i D:\\evidence -r --anchor roots/ca-root.pem --at 2025-03-14 --purpose document-signing
+  With revocation information supplied offline, Spanish reports, case CASE-2026-014:
+    rv-certcheck analyze -i D:\\evidence --anchor roots/ca-root.pem --crl ca.crl --ocsp leaf.ocsp --lang es --case CASE-2026-014
+  Against the EU trust list snapshot imported earlier (rv-certcheck trust-list import):
+    rv-certcheck analyze -i D:\\evidence --anchor tl:eu@latest
   Verify the audit log afterwards:
     rv-certcheck verify-log rakvor-out/logs/<RUN-ID>/audit.jsonl
-  Open a case folder and register the evidence (intake), then verify the whole case:
-    rv-certcheck scan -i D:\\evidence -r --case-dir E:\\CASE-014 --case CASE-014 --jurisdiction fr
+  Analyze the evidence registered in a case folder (intake by rv-hashinv), then verify the whole case:
+    rv-certcheck analyze --case-dir E:\\CASE-014 --anchor roots/ca-root.pem
     rv-certcheck verify-case E:\\CASE-014
   Re-examine two registered items of the case:
-    rv-certcheck scan --case-dir E:\\CASE-014 --evidence E0001,E0002
+    rv-certcheck analyze --case-dir E:\\CASE-014 --evidence E0001,E0002
 
 EXIT CODES:
   0    Completed; no high-severity finding.
   1    Runtime error (input not found, output not writable, case log locked, ...).
        See the audit log.
-  2    Usage error (unknown option, more than two hash algorithms, unsupported language).
+  2    Usage error (unknown option, more than two hash algorithms, unsupported language, bad
+       --anchor/--at/--purpose value, --online in this build).
        With --case-dir: folder of another case or schema, --case missing when creating the
        case, unknown evidence id.
-  3    Completed with at least one high-severity finding (e.g. unreadable file, program under
-       another name, evidence that differs from the case registry), or the case folder fails
-       verification (nothing is written to it).
+  3    Completed with at least one high-severity finding (e.g. untrusted or invalid chain, revoked
+       or expired certificate, key that does not match, invalid timestamp token, evidence that
+       differs from the case registry), or the case folder fails verification (nothing is
+       written to it).
   130  Cancelled with Ctrl+C. Partial reports and the cancellation are written to the audit log.
 
 FILES WRITTEN:
@@ -71,6 +86,9 @@ FILES WRITTEN:
   <OUT>/logs/<RUN-ID>/hashes.csv          Hash register: index, path, size, digests, status.
   <OUT>/logs/<RUN-ID>/environment.json    Tool and dependency versions, OS, host, user, command line.
   <OUT>/reports/<RUN-ID>/statistics.json  Run statistics (+ statistics.<LANG>.html and .pdf).
+  <OUT>/reports/<RUN-ID>/items/<NNNNN>-<NAME>/chain.json        Chain per end-entity certificate, per-depth
+                                                                OpenSSL code and reason, revocation, trust list.
+  <OUT>/reports/<RUN-ID>/items/<NNNNN>-<NAME>/certificate.txt   OpenSSL-style dump of every certificate.
   <OUT>/reports/<RUN-ID>/items/<NNNNN>-<NAME>/technical.json|.<LANG>.html|.<LANG>.pdf   Technical review.
   <OUT>/reports/<RUN-ID>/items/<NNNNN>-<NAME>/summary.json|.<LANG>.html|.<LANG>.pdf     Customer summary.
   <OUT>/reports/<RUN-ID>/items/<NNNNN>-<NAME>/custody.json|.<es|fr>.html|.pdf|.en.html|.pdf  Custody form.
@@ -79,7 +97,7 @@ FILES WRITTEN:
   <CASE>/case.json                        Case id, jurisdiction, creation (written once).
   <CASE>/case-log.jsonl                   Hash-chained case log of every tool: case_created,
                                           run_started, evidence_registered, run_finished.
-  <CASE>/evidence/registry.json|.csv      Evidence registry: E0001..., path, size, hashes.
+  <CASE>/evidence/registry.json|.csv      Evidence registry (written at intake): E0001..., path, hashes.
 
 FORENSIC NOTES:
   - Evidence is opened read-only and never modified; modification times are compared before and after.
@@ -89,6 +107,9 @@ FORENSIC NOTES:
     kept outside the log: the RFC 3161 timestamp or, with --case-dir, the case log. Keep the log
     folder with the reports.
   - A file without findings is not proven authentic; read the Limitations section of each report.
+  - A chain is judged at one instant (--at): an expired certificate can be normal for an old
+    signature, whose validity matters at signing time. Offline, revocation is only as complete as
+    the CRLs and OCSP responses supplied. Private keys and passwords never reach a log or report.
   - MD5 and SHA-1 are accepted for compatibility with older case files; pair them with SHA-256 or BLAKE3.
   - The chain head is timestamped by an RFC 3161 authority (proves when the log existed). Offline? The run
     finishes with `timestamp_pending`; run `rv-certcheck timestamp <LOG>` later.
@@ -109,9 +130,27 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Hash, check and report on a file, a folder or a list of files.
-    #[command(long_about = LONG_ABOUT, after_long_help = SCAN_AFTER_HELP)]
-    Scan(Box<ScanArgs>),
+    /// Analyze certificates, chains, CRLs, OCSP responses, timestamp tokens, keys and CSRs.
+    #[command(long_about = LONG_ABOUT, after_long_help = ANALYZE_AFTER_HELP)]
+    Analyze(Box<AnalyzeArgs>),
+    /// Rakvor internal PKI: init-root, import, issue, revoke, crl, ocsp-sign.
+    #[command(subcommand)]
+    Pki(commands::PkiCommand),
+    /// Certificate signing requests: new, show.
+    #[command(subcommand)]
+    Csr(commands::CsrCommand),
+    /// Reproducible lab and test certificate sets.
+    #[command(subcommand)]
+    Lab(commands::LabCommand),
+    /// Private keys: match a key with a certificate.
+    #[command(subcommand)]
+    Keys(commands::KeysCommand),
+    /// PKCS#11 hardware tokens: list slots, tokens and keys.
+    #[command(subcommand)]
+    Tokens(commands::TokensCommand),
+    /// EU and Colombian trust lists: import, list, show dated snapshots.
+    #[command(subcommand, name = "trust-list")]
+    TrustList(commands::TrustListCommand),
     /// Verify an audit log (audit.jsonl): edited, deleted or re-ordered entries, and truncation.
     #[command(after_long_help = "\
 CHECKS:
@@ -225,7 +264,7 @@ enum ProgressMode {
 }
 
 #[derive(Args)]
-struct ScanArgs {
+struct AnalyzeArgs {
     /// File or folder to review. Repeat for several.
     ///
     /// Folders are reviewed one level deep unless --recursive is given. Symbolic links are not followed.
@@ -379,12 +418,84 @@ struct ScanArgs {
         verbatim_doc_comment
     )]
     evidence: Vec<String>,
+
+    /// Trust anchor: certificates to trust. Repeat for several. A FILE (PEM, DER or PKCS#7), `rakvor`
+    /// (the bundled Rakvor internal root), `system` (the operating system's store), or a trust-list
+    /// snapshot `tl:eu@SNAPSHOT` / `tl:co@SNAPSHOT` (`latest` = newest; see `trust-list list`).
+    /// Default: none (nothing is trusted: chains are built and checked, and reported untrusted)
+    /// Example: --anchor roots/ca-root.pem --anchor tl:eu@latest
+    #[arg(long = "anchor", value_name = "ANCHOR", value_parser = parse_anchor, verbatim_doc_comment)]
+    anchors: Vec<AnchorSpec>,
+
+    /// Instant the chains are judged at: now, signing-time (the token's or signature's time), a date
+    /// (YYYY-MM-DD, midnight UTC) or an RFC 3339 time.
+    /// Default: now
+    /// Example: --at 2025-03-14   or   --at 2025-03-14T09:30:00-05:00   or   --at signing-time
+    #[arg(long, value_name = "WHEN", default_value = "now", value_parser = parse_at, verbatim_doc_comment, hide_default_value = true)]
+    at: AtTime,
+
+    /// Purpose checked against key usage and extended key usage: any, tls-server, tls-client,
+    /// code-signing, document-signing, email, timestamping.
+    /// Default: any
+    /// Example: --purpose document-signing
+    #[arg(long, value_name = "PURPOSE", default_value = "any", value_parser = parse_purpose, verbatim_doc_comment, hide_default_value = true)]
+    purpose: Purpose,
+
+    /// CRL file (DER or PEM) used for revocation, in addition to the CRLs among the evidence. Repeatable.
+    /// Each file is hashed and recorded in the audit log.
+    /// Default: none
+    /// Example: --crl ca-2025-03.crl
+    #[arg(long = "crl", value_name = "FILE", verbatim_doc_comment)]
+    crls: Vec<PathBuf>,
+
+    /// OCSP response file (DER) used for revocation, in addition to those among the evidence. Repeatable.
+    /// Default: none
+    /// Example: --ocsp signer-2025-03-14.ocsp
+    #[arg(long = "ocsp", value_name = "FILE", verbatim_doc_comment)]
+    ocsps: Vec<PathBuf>,
+
+    /// Fetch CRLs and OCSP responses from the URLs in the certificates (every URL, response hash and
+    /// time is audited). Not available in this build: supply --crl / --ocsp files instead.
+    /// Default: off (offline)
+    /// Example: --online
+    #[arg(long, verbatim_doc_comment)]
+    online: bool,
+
+    /// Environment variable holding the password of PKCS#12 items and encrypted keys (never logged).
+    /// Default: RV_P12_PASSWORD (when unset, PKCS#12 items are read without a password)
+    /// Example: --p12-pass-env CASE_P12_PASS
+    #[arg(
+        long,
+        value_name = "VAR",
+        default_value = "RV_P12_PASSWORD",
+        verbatim_doc_comment,
+        hide_default_value = true
+    )]
+    p12_pass_env: String,
+}
+
+fn parse_anchor(s: &str) -> Result<AnchorSpec, String> {
+    AnchorSpec::parse(s).map_err(|e| e.message)
+}
+
+fn parse_at(s: &str) -> Result<AtTime, String> {
+    AtTime::parse(s).map_err(|e| e.message)
+}
+
+fn parse_purpose(s: &str) -> Result<Purpose, String> {
+    Purpose::parse(s).map_err(|e| e.message)
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
     ExitCode::from(match cli.command {
-        Command::Scan(a) => scan(*a),
+        Command::Analyze(a) => analyze(*a),
+        Command::Pki(c) => commands::pki(c),
+        Command::Csr(c) => commands::csr(c),
+        Command::Lab(c) => commands::lab(c),
+        Command::Keys(c) => commands::keys(c),
+        Command::Tokens(c) => commands::tokens(c),
+        Command::TrustList(c) => commands::trust_list(c),
         Command::VerifyLog { log } => verify_log(log),
         Command::VerifyCase { case, rehash } => verify_case(case, rehash),
         Command::SelfTest => self_test(),
@@ -402,13 +513,33 @@ fn main() -> ExitCode {
 
 fn usage_error(msg: &str) -> u8 {
     eprintln!(
-        "error: {}\n\nFor more information, try 'rv-certcheck scan --help'.",
+        "error: {}\n\nFor more information, try 'rv-certcheck analyze --help'.",
         msg
     );
     EXIT_USAGE
 }
 
-fn scan(a: ScanArgs) -> u8 {
+fn analyze(a: AnalyzeArgs) -> u8 {
+    if a.online {
+        return usage_error(
+            "--online is not available in this build: revocation is checked offline only. Supply the CA's CRL with --crl FILE or an OCSP response with --ocsp FILE.",
+        );
+    }
+    for f in a.crls.iter().chain(&a.ocsps) {
+        if !f.is_file() {
+            return usage_error(&format!("no such file: {}", f.display()));
+        }
+    }
+    for anchor in &a.anchors {
+        if let AnchorSpec::File { path } = anchor
+            && !path.is_file()
+        {
+            return usage_error(&format!(
+                "--anchor {}: no such file (use a certificate file, rakvor, system or tl:eu@SNAPSHOT)",
+                path.display()
+            ));
+        }
+    }
     let mut algos = Vec::new();
     for h in &a.hashes {
         match HashAlgo::parse(h) {
@@ -477,6 +608,18 @@ fn scan(a: ScanArgs) -> u8 {
         case_dir: a.case_dir.clone(),
         evidence_ids,
         case_role: CASE_ROLE,
+        cert: CertOptions {
+            validation: ValidationOptions {
+                anchors: a.anchors.clone(),
+                at: a.at.clone(),
+                purpose: a.purpose,
+                crl_files: a.crls.clone(),
+                ocsp_files: a.ocsps.clone(),
+                online: a.online,
+                trust_list_dir: None,
+            },
+            p12_password: std::env::var(&a.p12_pass_env).ok().map(Secret::new),
+        },
     };
 
     let bar = match a.progress {
@@ -768,7 +911,7 @@ fn docs_cli() -> String {
     let mut out = String::from(
         "# Command-line reference\n\n<!-- Generated by `rv-certcheck docs-cli`. Do not edit by hand: CI fails if this file differs. -->\n\n",
     );
-    out.push_str("```mermaid\nflowchart LR\n  A[rv-certcheck] --> B[scan]\n  A --> C[verify-log]\n  A --> D[self-test]\n  A --> T[timestamp]\n  A --> V[verify-case]\n  T --> E\n  B --> E[(logs/RUN-ID)]\n  B --> F[(reports/RUN-ID)]\n  B -. --case-dir .-> K[(CASE folder)]\n  V --> K\n  C --> E\n```\n\n");
+    out.push_str("```mermaid\nflowchart LR\n  A[rv-certcheck] --> B[analyze]\n  A --> C[verify-log]\n  A --> D[self-test]\n  A --> T[timestamp]\n  A --> V[verify-case]\n  A --> P[pki / csr / lab / keys / tokens]\n  A --> L[trust-list]\n  T --> E\n  B --> E[(logs/RUN-ID)]\n  B --> F[(reports/RUN-ID)]\n  B -. --case-dir .-> K[(CASE folder)]\n  P --> CA[(CA folder rakvor.ca/1)]\n  L --> S[(trust-list snapshots)]\n  B -. --anchor tl: .-> S\n  V --> K\n  C --> E\n```\n\n");
     out.push_str(&format!(
         "## rv-certcheck\n\n```text\n{}\n```\n\n",
         root.render_long_help().to_string().trim_end()
@@ -786,6 +929,25 @@ fn docs_cli() -> String {
             name,
             sub.render_long_help().to_string().trim_end()
         ));
+        // Command groups (pki, csr, lab, keys, tokens, trust-list): one section per subcommand.
+        sub.build();
+        let children: Vec<String> = sub
+            .get_subcommands()
+            .filter(|c| !c.is_hide_set() && c.get_name() != "help")
+            .map(|c| c.get_name().to_string())
+            .collect();
+        for child in children {
+            let c = sub.find_subcommand_mut(&child).expect("subcommand");
+            let mut c = c
+                .clone()
+                .bin_name(format!("rv-certcheck {} {}", name, child));
+            out.push_str(&format!(
+                "### rv-certcheck {} {}\n\n```text\n{}\n```\n\n",
+                name,
+                child,
+                c.render_long_help().to_string().trim_end()
+            ));
+        }
     }
     out
 }

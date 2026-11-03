@@ -46,6 +46,7 @@ Source: "{#SourceDir}\NOTICE"; DestDir: "{app}"
 Source: "{#SourceDir}\CHANGELOG.md"; DestDir: "{app}"
 Source: "{#SourceDir}\docs\*"; DestDir: "{app}\docs"; Flags: recursesubdirs
 Source: "{#SourceDir}\examples\sample\evidence\*"; DestDir: "{app}\examples\sample\evidence"
+Source: "{#SourceDir}\examples\sample\anchors\*"; DestDir: "{app}\examples\sample\anchors"
 
 [Icons]
 Name: "{group}\RV CertCheck"; Filename: "{app}\rv-certcheck-gui.exe"

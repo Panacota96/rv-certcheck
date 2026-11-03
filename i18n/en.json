@@ -139,13 +139,149 @@
       "title": "Registered path now holds different content",
       "shows": "This path was registered earlier as %{previous_id} with other content; the current content gets a new evidence ID.",
       "does_not_prove": "Which version is the original or why the content changed."
+    },
+    "CERT_CHAIN_VALID": {
+      "title": "Certificate chain valid at the date checked",
+      "shows": "OpenSSL built a path from %{subject} to the trust anchor %{anchor} and every check passed (signatures, validity at %{at}, purpose, constraints and the revocation information supplied).",
+      "does_not_prove": "That the certificate holder signed or approved any particular document, that the anchor deserves trust (that is the examiner's choice of --anchor), or that the result holds at another date."
+    },
+    "CERT_CHAIN_UNTRUSTED": {
+      "title": "Chain does not reach a trusted anchor",
+      "shows": "No path from %{subject} to any of the anchors given could be completed. OpenSSL reported at depth %{depth}: %{reason} (code %{code}).",
+      "does_not_prove": "That the certificate is forged or invalid: the issuing CA may simply not be among the anchors chosen, or an intermediate certificate may be missing from the material examined."
+    },
+    "CERT_SIGNATURE_INVALID": {
+      "title": "Certificate signature does not verify",
+      "shows": "The signature on %{subject} (depth %{depth}) does not verify with its issuer's public key: %{reason}.",
+      "does_not_prove": "Who altered the certificate or why; a damaged copy or a certificate attributed to the wrong issuer gives the same result."
+    },
+    "CERT_EXPIRED_AT_DATE": {
+      "title": "Certificate expired at the date checked",
+      "shows": "%{subject} was valid until %{not_after}; the chain was checked at %{at}, after that date.",
+      "does_not_prove": "That a signature made with it is invalid: what matters for a signature is the validity at signing time (check again with --at signing-time or the date of signing). Expiry of old certificates is normal."
+    },
+    "CERT_NOT_YET_VALID_AT_DATE": {
+      "title": "Certificate not yet valid at the date checked",
+      "shows": "%{subject} is valid only from %{not_before}; the chain was checked at %{at}, before that date.",
+      "does_not_prove": "That the certificate was back-dated or forged; a wrong --at value, a wrong system clock or a signing time recorded in another time zone produce the same result."
+    },
+    "CERT_REVOKED": {
+      "title": "Certificate revoked",
+      "shows": "%{subject} (serial %{serial}) is listed as revoked since %{revoked_at}, reason %{reason}, according to %{source}.",
+      "does_not_prove": "That the holder did anything wrong (revocation also follows routine changes such as a superseded key) or that signatures made before %{revoked_at} are invalid."
+    },
+    "REVOCATION_UNKNOWN": {
+      "title": "Revocation status unknown",
+      "shows": "No CRL or OCSP response covering %{subject} was available for the date checked (%{source}); its revocation status could not be determined.",
+      "does_not_prove": "That the certificate is revoked or that it is not; supply the CA's CRL or an OCSP response (--crl, --ocsp) to decide."
+    },
+    "CERT_PURPOSE_MISMATCH": {
+      "title": "Certificate not issued for this purpose",
+      "shows": "%{subject} does not allow the purpose %{purpose}: key usage %{key_usage}, extended key usage %{eku}.",
+      "does_not_prove": "That the certificate was misused on purpose; software often accepts such certificates, and the purpose checked is the one chosen with --purpose."
+    },
+    "CERT_NAME_CONSTRAINT_VIOLATION": {
+      "title": "Name outside the issuing CA's constraints",
+      "shows": "The name %{name} in %{subject} is outside the names that %{constraint_by} is allowed to certify (name constraints).",
+      "does_not_prove": "That the certificate is malicious; it shows only that a CA issued a name it was restricted from issuing, which OpenSSL rejects."
+    },
+    "CERT_WEAK_KEY": {
+      "title": "Weak public key",
+      "shows": "%{subject} uses a %{algorithm} key of %{size}, below current minimums (RSA 2048 bits, elliptic curves of 256 bits).",
+      "does_not_prove": "That the key was broken or that signatures made with it are false; it shows a lower resistance to attack than current practice requires."
+    },
+    "CERT_WEAK_SIGNATURE_ALGORITHM": {
+      "title": "Weak signature algorithm",
+      "shows": "%{subject} is signed with %{algorithm}, a hash algorithm with known collision attacks (MD5, SHA-1).",
+      "does_not_prove": "That this certificate was forged; it shows that a collision forgery was feasible for an attacker with the means, so the certificate deserves less weight on its own."
+    },
+    "CERT_SELF_SIGNED": {
+      "title": "Self-signed certificate",
+      "shows": "%{subject} is signed by its own key (subject and issuer are identical): it is a root or a stand-alone certificate.",
+      "does_not_prove": "That it is untrustworthy; every root CA is self-signed. Its trust depends only on whether it is one of the anchors chosen."
+    },
+    "CERT_IN_TRUST_LIST": {
+      "title": "Issuer listed in a trust list",
+      "shows": "%{subject} belongs to the service %{service} listed in %{list} (snapshot %{snapshot}); its status at %{at} was %{status}.",
+      "does_not_prove": "That the certificate or signature is qualified or legally valid: that also depends on the service type, the certificate's own statements and the snapshot being current. The list's own signature is not verified in v0.1."
+    },
+    "CERT_NOT_IN_TRUST_LIST": {
+      "title": "Not found in the trust list used",
+      "shows": "No certificate of the chain of %{subject} is a service identity of %{list} (snapshot %{snapshot}).",
+      "does_not_prove": "That the certificate is invalid or untrustworthy; most certificates are legitimately outside these lists, and the snapshot may be out of date."
+    },
+    "CERT_ISSUED_BY_RAKVOR_INTERNAL": {
+      "title": "Rakvor internal certificate (internal use only)",
+      "shows": "%{subject} was issued by Rakvor's internal PKI (policy %{policy}). It is for Rakvor's internal use only: it is not a firma digital under Ley 527 de 1999, art. 28 (Colombia), because Rakvor is not an authorised entidad de certificación, and it is not a qualified certificate under eIDAS (Regulation (EU) No 910/2014).",
+      "does_not_prove": "Any legal effect equivalent to a handwritten signature, and the identity of a signer beyond Rakvor's own internal records; a signature made with it shows only that it was made with a key Rakvor issued."
+    },
+    "KEY_MATCHES_CERTIFICATE": {
+      "title": "Private key matches a certificate",
+      "shows": "The public part of the private key in %{key} equals the public key of %{certificates}.",
+      "does_not_prove": "Who held or used the key, or that the key was not copied elsewhere; the key itself was used only in memory and is not reproduced in any report."
+    },
+    "KEY_DOES_NOT_MATCH": {
+      "title": "Private key does not match its certificate",
+      "shows": "The private key in %{key} is not the key of %{certificate}, the certificate supplied with it.",
+      "does_not_prove": "Which key is the right one, or that anything was tampered with; keys and certificates are often mixed up when exported or renewed."
+    },
+    "KEY_NOT_PAIRED": {
+      "title": "Private key without a matching certificate",
+      "shows": "No certificate examined in this run has the public key of the private key in %{key}.",
+      "does_not_prove": "That the key is foreign or suspicious; its certificate may simply not be part of the material examined."
+    },
+    "TIMESTAMP_TOKEN_VALID": {
+      "title": "Timestamp token valid",
+      "shows": "The RFC 3161 token states the time %{gen_time}; its signature by %{tsa} verifies (policy %{policy}, imprint %{hash_algorithm}) and the TSA certificate chain was valid at that time.",
+      "does_not_prove": "That the timestamped data is authentic or who submitted it; it proves only that data with this digest existed at that time, as far as the TSA and the anchors chosen are trusted."
+    },
+    "TIMESTAMP_TOKEN_INVALID": {
+      "title": "Timestamp token does not verify",
+      "shows": "The RFC 3161 token could not be verified: %{reason}.",
+      "does_not_prove": "That the time it states is false or that the token was forged; a missing TSA certificate, an anchor not supplied or a damaged copy give the same result."
+    },
+    "PKCS12_UNREADABLE": {
+      "title": "PKCS#12 file could not be opened",
+      "shows": "The PKCS#12 (PFX) store could not be read: %{reason}. Only what is readable without the password was examined.",
+      "does_not_prove": "That the file is damaged or that its content is suspicious; a missing or wrong password, or a legacy encryption, has the same effect. The password is never recorded."
+    },
+    "CRYPTO_INPUT_NOT_RECOGNISED": {
+      "title": "Not a recognised cryptographic object",
+      "shows": "The content is not a certificate, certificate bundle, PKCS#7, PKCS#12, CRL, OCSP response, timestamp token, private key or CSR (%{kind}); only the general file checks were applied.",
+      "does_not_prove": "That the file is irrelevant or harmless; it was simply not analysed as cryptographic evidence."
+    },
+    "CRYPTO_INPUT_UNPARSABLE": {
+      "title": "Cryptographic object could not be parsed",
+      "shows": "The content looks like a %{kind} but could not be decoded: %{error}.",
+      "does_not_prove": "That it was tampered with; truncation during copy, an unusual encoding or a format this version does not support give the same result."
+    },
+    "ANALYSIS_NOT_IMPLEMENTED": {
+      "title": "Analysis step not available in this build",
+      "shows": "The step %{operation} is not implemented in this development build, so the item was hashed and registered but not analysed as cryptographic evidence.",
+      "does_not_prove": "Anything about the item's certificates, keys or signatures; run a release build before relying on this report."
+    },
+    "EVIDENCE_CHANGED_DURING_READ": {
+      "title": "File changed while it was being examined",
+      "shows": "The bytes analysed have %{algorithm} %{actual}, but the same file hashed %{expected} moments before: the file changed during the examination.",
+      "does_not_prove": "Who or what changed it (another program, synchronisation, failing media); the analysis results may not describe the registered item."
+    },
+    "ANALYSIS_STEP_FAILED": {
+      "title": "Analysis step failed",
+      "shows": "The step %{operation} stopped with an error: %{error}. The other results for this item remain valid, but this step gave no answer.",
+      "does_not_prove": "Anything about what the step would have found; repeat it after correcting the cause (missing anchor file, unsupported format...)."
     }
   },
   "limitations": {
     "SIGNATURE_TABLE_LIMITED": "Type detection uses a limited table of common file signatures; unknown types are reported as unknown, not as suspicious.",
     "TIMESTAMPS_FROM_FILESYSTEM": "Modification times come from the file system of the examined copy and may differ from the original source.",
     "CLEAN_RESULT_IS_NOT_AUTHENTICITY": "A result without findings does not prove that a file is authentic or unaltered before acquisition.",
-    "TIMESTAMP_PROVES_EXISTENCE_ONLY": "A trusted timestamp proves the audit log existed in this exact form at the stated time; it does not prove that the examined copy matches the original source."
+    "TIMESTAMP_PROVES_EXISTENCE_ONLY": "A trusted timestamp proves the audit log existed in this exact form at the stated time; it does not prove that the examined copy matches the original source.",
+    "VALIDATION_IS_AS_OF_THE_DATE_GIVEN": "Every chain is judged at one instant (--at, recorded in each report); the same certificate can be valid at one date and expired or revoked at another.",
+    "OFFLINE_REVOCATION_DEPENDS_ON_SUPPLIED_FILES": "Offline, revocation is checked only against the CRLs and OCSP responses supplied (--crl, --ocsp, or found among the evidence); a revocation published elsewhere is not seen.",
+    "TRUST_LIST_SNAPSHOT_DATED": "Trust lists are used as dated snapshots (date and SHA-256 recorded); services added, suspended or withdrawn after the snapshot are not reflected.",
+    "TRUST_LIST_SIGNATURE_NOT_VERIFIED_V01": "In version 0.1 the trust list's own XAdES signature is not verified; the snapshot's source and SHA-256 are recorded so it can be checked independently. The Colombian list is a curated file, because ONAC publishes no machine-readable list.",
+    "RAKVOR_CERTIFICATES_ARE_INTERNAL_USE": "Certificates issued by Rakvor's internal PKI are for internal use only: they are not a firma digital under Ley 527 de 1999, art. 28 (Colombia), and not qualified certificates under eIDAS (Regulation (EU) No 910/2014).",
+    "NO_VALIDATED_ERROR_RATES_YET": "The tool's results have been compared with OpenSSL and Python reference implementations on test sets, but no error rate has yet been measured on a validated corpus."
   },
   "brand": {
     "descriptor": "FORENSICS | INCIDENT RESPONSE | SECURITY",

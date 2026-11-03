@@ -7,3 +7,17 @@
 *.pdf binary
 examples/sample/evidence/** binary
 tests/golden/*.zip binary
+# Certificate fixtures and anchors: byte-exact (hashes, signatures and DER must never be touched by eol rules).
+examples/sample/anchors/** binary
+tests/fixtures/openssl/** binary
+*.crt binary
+*.cer binary
+*.crl binary
+*.der binary
+*.p7b binary
+*.p12 binary
+*.pfx binary
+*.tsr binary
+*.tst binary
+*.ocsp binary
+tests/fixtures/inventory/** binary

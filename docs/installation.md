@@ -165,13 +165,13 @@ rv-certcheck self-test
 duplicates, reports and the audit chain:
 
 ```powershell
-# portable zip (script included): self-test, sample scan, verify-log, hashes.csv vs expected_hashes.csv
+# portable zip (script included): self-test, sample analyze, verify-log, hashes.csv vs expected_hashes.csv
 .\examples\sample\run.ps1 -Bin .\rv-certcheck.exe
 
 # installer (no script installed): run it by hand into a temporary folder
 $app = "$env:LOCALAPPDATA\Programs\Rakvor\RV CertCheck"
 $out = Join-Path $env:TEMP "rv-certcheck-check"
-rv-certcheck scan -i "$app\examples\sample\evidence" --hash sha256,md5 --out $out --progress none --no-timestamp
+rv-certcheck analyze -i "$app\examples\sample\evidence" --hash sha256,md5 --out $out --progress none --no-timestamp
 $LASTEXITCODE                                  # 0
 rv-certcheck verify-log (Get-ChildItem "$out\logs" | Select-Object -Last 1).FullName   # OK … chain intact
 ```

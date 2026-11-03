@@ -1,15 +1,19 @@
 #!/usr/bin/env sh
 # Runs the sample review and checks the result. Usage: examples/sample/run.sh [path-to-rv-certcheck]
 # Output folder: examples/sample/out (or $RV_SAMPLE_OUT).
-# Fails (non-zero exit) if the self-test, the scan or verify-log fails, or if the tool's hash register
+# Fails (non-zero exit) if the self-test, the analysis or verify-log fails, or if the tool's hash register
 # (logs/<RUN-ID>/hashes.csv) differs from the independently computed expected_hashes.csv.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 bin=${1:-rv-certcheck}
 out=${RV_SAMPLE_OUT:-"$here/out"}
 "$bin" self-test
-# Expected exit code 0: one medium finding (extension mismatch) and one duplicate pair, no high finding.
-"$bin" scan --input "$here/evidence" --hash sha256,md5 --lang all --case DEMO-001 --actor "Sample" --out "$out" --progress none
+# Lab certificates judged at 2026-06-01 against the lab root. Exit 3 is expected once the certificate layer is
+# complete (expired, revoked, wrong-root, mismatched key: high findings); 0 while it is still a stub.
+code=0
+"$bin" analyze --input "$here/evidence" --anchor "$here/anchors/rakvor-lab-root.crt" --at 2026-06-01T00:00:00Z \
+  --hash sha256,md5 --lang all --case DEMO-001 --actor "Sample" --out "$out" --progress none || code=$?
+[ "$code" -eq 0 ] || [ "$code" -eq 3 ] || exit "$code"
 run=$(ls "$out/logs" | tail -n 1)
 "$bin" verify-log "$out/logs/$run"
 # Compare the tool's hash register with expected_hashes.csv: same files, sizes, SHA-256 and MD5.

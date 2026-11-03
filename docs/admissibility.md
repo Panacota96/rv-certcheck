@@ -64,7 +64,7 @@ PRIS content.
 | Key | Feature | Where it is implemented (file / command) |
 | --- | --- | --- |
 | F1 | Read-only evidence access (software level), one sequential read per file | `File::open` in [src/core/src/run.rs](../src/core/src/run.rs); `mtime_unchanged` in `item_hashed`; symbolic links never followed ([src/core/src/input.rs](../src/core/src/input.rs)) |
-| F2 | Hashing with 1 or 2 algorithms (md5, sha1, sha256, sha512, sha3-256, blake3) in one read | [src/core/src/hash.rs](../src/core/src/hash.rs); `scan --hash`; `logs/<RUN-ID>/hashes.csv` |
+| F2 | Hashing with 1 or 2 algorithms (md5, sha1, sha256, sha512, sha3-256, blake3) in one read | [src/core/src/hash.rs](../src/core/src/hash.rs); `analyze --hash`; `logs/<RUN-ID>/hashes.csv` |
 | F3 | SHA-256 hash-chained audit log + independent verifier | [src/core/src/audit.rs](../src/core/src/audit.rs); `rv-certcheck verify-log`; [tests/verify_chain.py](../tests/verify_chain.py) |
 | F4 | `environment.json`: tool, compiler and dependency versions, OS, host, user, command line | [src/core/src/env.rs](../src/core/src/env.rs), [src/core/build.rs](../src/core/build.rs) |
 | F5 | RFC 3161 timestamp of the audit chain head | [src/core/src/trust.rs](../src/core/src/trust.rs); `--tsa-url`, `--no-timestamp`, `rv-certcheck timestamp` |

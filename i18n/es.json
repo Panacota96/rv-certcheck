@@ -139,13 +139,149 @@
       "title": "La ruta registrada contiene ahora otro contenido",
       "shows": "Esta ruta se registró antes como %{previous_id} con otro contenido; el contenido actual recibe un nuevo ID de evidencia.",
       "does_not_prove": "Cuál versión es la original ni por qué cambió el contenido."
+    },
+    "CERT_CHAIN_VALID": {
+      "title": "Cadena de certificados válida en la fecha verificada",
+      "shows": "OpenSSL construyó una ruta desde %{subject} hasta el ancla de confianza %{anchor} y todas las verificaciones fueron superadas (firmas, vigencia a %{at}, propósito, restricciones y la información de revocación suministrada).",
+      "does_not_prove": "Que el titular del certificado haya firmado o aprobado un documento concreto, que el ancla merezca confianza (eso depende del --anchor elegido por el perito) ni que el resultado sea el mismo en otra fecha."
+    },
+    "CERT_CHAIN_UNTRUSTED": {
+      "title": "La cadena no llega a un ancla de confianza",
+      "shows": "No se pudo completar ninguna ruta desde %{subject} hasta las anclas indicadas. OpenSSL informó en la profundidad %{depth}: %{reason} (código %{code}).",
+      "does_not_prove": "Que el certificado sea falso o inválido: puede que la autoridad emisora no esté entre las anclas elegidas o que falte un certificado intermedio en el material examinado."
+    },
+    "CERT_SIGNATURE_INVALID": {
+      "title": "La firma del certificado no se verifica",
+      "shows": "La firma de %{subject} (profundidad %{depth}) no se verifica con la clave pública de su emisor: %{reason}.",
+      "does_not_prove": "Quién alteró el certificado ni por qué; una copia dañada o un certificado atribuido al emisor equivocado dan el mismo resultado."
+    },
+    "CERT_EXPIRED_AT_DATE": {
+      "title": "Certificado vencido en la fecha verificada",
+      "shows": "%{subject} era válido hasta %{not_after}; la cadena se verificó a %{at}, después de esa fecha.",
+      "does_not_prove": "Que una firma hecha con él sea inválida: para una firma importa la vigencia en el momento de firmar (vuelva a verificar con --at signing-time o con la fecha de la firma). Que un certificado antiguo esté vencido es normal."
+    },
+    "CERT_NOT_YET_VALID_AT_DATE": {
+      "title": "Certificado aún no vigente en la fecha verificada",
+      "shows": "%{subject} solo es válido desde %{not_before}; la cadena se verificó a %{at}, antes de esa fecha.",
+      "does_not_prove": "Que el certificado haya sido antedatado o falsificado; un valor --at equivocado, un reloj del sistema erróneo o una hora de firma registrada en otra zona horaria producen el mismo resultado."
+    },
+    "CERT_REVOKED": {
+      "title": "Certificado revocado",
+      "shows": "%{subject} (serial %{serial}) figura como revocado desde %{revoked_at}, motivo %{reason}, según %{source}.",
+      "does_not_prove": "Que el titular haya actuado indebidamente (la revocación también responde a cambios rutinarios, como una clave reemplazada) ni que las firmas hechas antes de %{revoked_at} sean inválidas."
+    },
+    "REVOCATION_UNKNOWN": {
+      "title": "Estado de revocación desconocido",
+      "shows": "No se disponía de ninguna CRL ni respuesta OCSP que cubra %{subject} en la fecha verificada (%{source}); no se pudo determinar si está revocado.",
+      "does_not_prove": "Que el certificado esté revocado ni que no lo esté; aporte la CRL de la autoridad o una respuesta OCSP (--crl, --ocsp) para decidirlo."
+    },
+    "CERT_PURPOSE_MISMATCH": {
+      "title": "Certificado no emitido para este propósito",
+      "shows": "%{subject} no permite el propósito %{purpose}: uso de clave %{key_usage}, uso extendido %{eku}.",
+      "does_not_prove": "Que el certificado se haya usado indebidamente a propósito; muchos programas aceptan estos certificados, y el propósito verificado es el elegido con --purpose."
+    },
+    "CERT_NAME_CONSTRAINT_VIOLATION": {
+      "title": "Nombre fuera de las restricciones de la autoridad emisora",
+      "shows": "El nombre %{name} de %{subject} está fuera de los nombres que %{constraint_by} puede certificar (restricciones de nombre).",
+      "does_not_prove": "Que el certificado sea malicioso; solo muestra que una autoridad emitió un nombre que tenía restringido, lo que OpenSSL rechaza."
+    },
+    "CERT_WEAK_KEY": {
+      "title": "Clave pública débil",
+      "shows": "%{subject} usa una clave %{algorithm} de %{size}, por debajo de los mínimos actuales (RSA de 2048 bits, curvas elípticas de 256 bits).",
+      "does_not_prove": "Que la clave haya sido rota ni que las firmas hechas con ella sean falsas; muestra una resistencia a ataques menor que la exigida hoy."
+    },
+    "CERT_WEAK_SIGNATURE_ALGORITHM": {
+      "title": "Algoritmo de firma débil",
+      "shows": "%{subject} está firmado con %{algorithm}, un algoritmo de resumen con ataques de colisión conocidos (MD5, SHA-1).",
+      "does_not_prove": "Que este certificado haya sido falsificado; muestra que una falsificación por colisión era factible para un atacante con medios, por lo que el certificado por sí solo merece menos peso."
+    },
+    "CERT_SELF_SIGNED": {
+      "title": "Certificado autofirmado",
+      "shows": "%{subject} está firmado con su propia clave (sujeto y emisor idénticos): es una raíz o un certificado independiente.",
+      "does_not_prove": "Que no sea confiable; toda autoridad raíz es autofirmada. Su confianza depende solo de que esté entre las anclas elegidas."
+    },
+    "CERT_IN_TRUST_LIST": {
+      "title": "Emisor incluido en una lista de confianza",
+      "shows": "%{subject} pertenece al servicio %{service} incluido en %{list} (instantánea %{snapshot}); su estado a %{at} era %{status}.",
+      "does_not_prove": "Que el certificado o la firma sea cualificado o jurídicamente válido: eso depende también del tipo de servicio, de las declaraciones del propio certificado y de que la instantánea esté al día. La firma de la propia lista no se verifica en la v0.1."
+    },
+    "CERT_NOT_IN_TRUST_LIST": {
+      "title": "No figura en la lista de confianza usada",
+      "shows": "Ningún certificado de la cadena de %{subject} es identidad de un servicio de %{list} (instantánea %{snapshot}).",
+      "does_not_prove": "Que el certificado sea inválido o no confiable; la mayoría de los certificados están legítimamente fuera de estas listas, y la instantánea puede estar desactualizada."
+    },
+    "CERT_ISSUED_BY_RAKVOR_INTERNAL": {
+      "title": "Certificado interno de Rakvor (solo uso interno)",
+      "shows": "%{subject} fue emitido por la PKI interna de Rakvor (política %{policy}). Es solo para uso interno de Rakvor: no es una firma digital en el sentido del artículo 28 de la Ley 527 de 1999 (Colombia), porque Rakvor no es una entidad de certificación autorizada, y no es un certificado cualificado según eIDAS (Reglamento (UE) n.º 910/2014).",
+      "does_not_prove": "Ningún efecto jurídico equivalente a la firma manuscrita, ni la identidad de un firmante más allá de los registros internos de Rakvor; una firma hecha con él solo muestra que se hizo con una clave emitida por Rakvor."
+    },
+    "KEY_MATCHES_CERTIFICATE": {
+      "title": "La clave privada corresponde a un certificado",
+      "shows": "La parte pública de la clave privada de %{key} coincide con la clave pública de %{certificates}.",
+      "does_not_prove": "Quién tuvo o usó la clave, ni que no haya sido copiada en otro lugar; la clave solo se usó en memoria y no se reproduce en ningún informe."
+    },
+    "KEY_DOES_NOT_MATCH": {
+      "title": "La clave privada no corresponde a su certificado",
+      "shows": "La clave privada de %{key} no es la clave de %{certificate}, el certificado aportado con ella.",
+      "does_not_prove": "Cuál es la clave correcta ni que algo haya sido manipulado; claves y certificados se confunden a menudo al exportarlos o renovarlos."
+    },
+    "KEY_NOT_PAIRED": {
+      "title": "Clave privada sin certificado correspondiente",
+      "shows": "Ningún certificado examinado en esta ejecución tiene la clave pública de la clave privada de %{key}.",
+      "does_not_prove": "Que la clave sea ajena o sospechosa; puede que su certificado simplemente no forme parte del material examinado."
+    },
+    "TIMESTAMP_TOKEN_VALID": {
+      "title": "Sello de tiempo válido",
+      "shows": "El sello RFC 3161 indica la hora %{gen_time}; su firma por %{tsa} se verifica (política %{policy}, huella %{hash_algorithm}) y la cadena del certificado de la TSA era válida en ese momento.",
+      "does_not_prove": "Que los datos sellados sean auténticos ni quién los presentó; solo prueba que existían datos con ese resumen en ese momento, en la medida en que se confíe en la TSA y en las anclas elegidas."
+    },
+    "TIMESTAMP_TOKEN_INVALID": {
+      "title": "El sello de tiempo no se verifica",
+      "shows": "No se pudo verificar el sello RFC 3161: %{reason}.",
+      "does_not_prove": "Que la hora que indica sea falsa ni que el sello haya sido falsificado; un certificado de la TSA ausente, un ancla no aportada o una copia dañada dan el mismo resultado."
+    },
+    "PKCS12_UNREADABLE": {
+      "title": "No se pudo abrir el archivo PKCS#12",
+      "shows": "No se pudo leer el almacén PKCS#12 (PFX): %{reason}. Solo se examinó lo que es legible sin la contraseña.",
+      "does_not_prove": "Que el archivo esté dañado ni que su contenido sea sospechoso; una contraseña ausente o errónea, o un cifrado antiguo, producen el mismo efecto. La contraseña nunca se registra."
+    },
+    "CRYPTO_INPUT_NOT_RECOGNISED": {
+      "title": "No es un objeto criptográfico reconocido",
+      "shows": "El contenido no es un certificado, paquete de certificados, PKCS#7, PKCS#12, CRL, respuesta OCSP, sello de tiempo, clave privada ni CSR (%{kind}); solo se aplicaron las comprobaciones generales de archivo.",
+      "does_not_prove": "Que el archivo sea irrelevante o inofensivo; simplemente no se analizó como evidencia criptográfica."
+    },
+    "CRYPTO_INPUT_UNPARSABLE": {
+      "title": "No se pudo decodificar el objeto criptográfico",
+      "shows": "El contenido parece un %{kind} pero no se pudo decodificar: %{error}.",
+      "does_not_prove": "Que haya sido manipulado; un truncamiento durante la copia, una codificación inusual o un formato no soportado por esta versión dan el mismo resultado."
+    },
+    "ANALYSIS_NOT_IMPLEMENTED": {
+      "title": "Paso de análisis no disponible en esta versión",
+      "shows": "El paso %{operation} no está implementado en esta versión de desarrollo, por lo que el elemento se calculó y registró pero no se analizó como evidencia criptográfica.",
+      "does_not_prove": "Nada sobre los certificados, claves o firmas del elemento; use una versión publicada antes de basarse en este informe."
+    },
+    "EVIDENCE_CHANGED_DURING_READ": {
+      "title": "El archivo cambió mientras se examinaba",
+      "shows": "Los bytes analizados tienen %{algorithm} %{actual}, pero el mismo archivo dio %{expected} momentos antes: el archivo cambió durante el examen.",
+      "does_not_prove": "Quién o qué lo cambió (otro programa, una sincronización, un soporte defectuoso); los resultados del análisis pueden no describir el elemento registrado."
+    },
+    "ANALYSIS_STEP_FAILED": {
+      "title": "Falló un paso del análisis",
+      "shows": "El paso %{operation} terminó con un error: %{error}. Los demás resultados del elemento siguen siendo válidos, pero este paso no dio respuesta.",
+      "does_not_prove": "Nada sobre lo que el paso habría encontrado; repítalo tras corregir la causa (archivo de ancla ausente, formato no soportado...)."
     }
   },
   "limitations": {
     "SIGNATURE_TABLE_LIMITED": "La detección de tipo usa una tabla limitada de firmas comunes; los tipos desconocidos se reportan como desconocidos, no como sospechosos.",
     "TIMESTAMPS_FROM_FILESYSTEM": "Las fechas de modificación provienen del sistema de archivos de la copia examinada y pueden diferir de la fuente original.",
     "CLEAN_RESULT_IS_NOT_AUTHENTICITY": "Un resultado sin hallazgos no prueba que un archivo sea auténtico ni que no haya sido alterado antes de su adquisición.",
-    "TIMESTAMP_PROVES_EXISTENCE_ONLY": "Un sello de tiempo confiable prueba que el log de auditoría existía en esta forma exacta en la hora indicada; no prueba que la copia examinada coincida con la fuente original."
+    "TIMESTAMP_PROVES_EXISTENCE_ONLY": "Un sello de tiempo confiable prueba que el log de auditoría existía en esta forma exacta en la hora indicada; no prueba que la copia examinada coincida con la fuente original.",
+    "VALIDATION_IS_AS_OF_THE_DATE_GIVEN": "Cada cadena se evalúa en un único instante (--at, registrado en cada informe); el mismo certificado puede ser válido en una fecha y estar vencido o revocado en otra.",
+    "OFFLINE_REVOCATION_DEPENDS_ON_SUPPLIED_FILES": "Sin conexión, la revocación solo se verifica con las CRL y respuestas OCSP aportadas (--crl, --ocsp, o halladas entre la evidencia); una revocación publicada en otro lugar no se ve.",
+    "TRUST_LIST_SNAPSHOT_DATED": "Las listas de confianza se usan como instantáneas fechadas (fecha y SHA-256 registrados); los servicios añadidos, suspendidos o retirados después de la instantánea no se reflejan.",
+    "TRUST_LIST_SIGNATURE_NOT_VERIFIED_V01": "En la versión 0.1 no se verifica la firma XAdES de la propia lista de confianza; se registran el origen y el SHA-256 de la instantánea para poder comprobarla de forma independiente. La lista colombiana es un archivo curado, porque ONAC no publica una lista legible por máquina.",
+    "RAKVOR_CERTIFICATES_ARE_INTERNAL_USE": "Los certificados emitidos por la PKI interna de Rakvor son solo para uso interno: no constituyen una firma digital según el artículo 28 de la Ley 527 de 1999 (Colombia) ni son certificados cualificados según eIDAS (Reglamento (UE) n.º 910/2014).",
+    "NO_VALIDATED_ERROR_RATES_YET": "Los resultados de la herramienta se han comparado con OpenSSL y con implementaciones de referencia en Python sobre conjuntos de prueba, pero todavía no se ha medido una tasa de error sobre un corpus validado."
   },
   "brand": {
     "descriptor": "FORENSE | RESPUESTA A INCIDENTES | SEGURIDAD",

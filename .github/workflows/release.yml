@@ -52,7 +52,13 @@ jobs:
           sparse-checkout: packaging/signing
       - name: Rust toolchain pinned in rust-toolchain.toml (the release compiler is recorded in environment.json)
         run: rustup toolchain install && rustc --version
-      - name: Build (static CRT, see .cargo/config.toml)
+      - name: Strawberry Perl for the vendored OpenSSL build
+        shell: pwsh
+        run: |
+          $perl = "C:\Strawberry\perl\bin\perl.exe"
+          if (-not (Test-Path $perl)) { choco install strawberryperl -y --no-progress }
+          "OPENSSL_SRC_PERL=$perl" >> $env:GITHUB_ENV
+      - name: Build (static CRT, see .cargo/config.toml; OpenSSL vendored and linked statically)
         run: cargo build --release --locked -p rv-certcheck-cli -p rv-certcheck-gui
       - name: Code signing of the executables (runs only when the SIGN_PFX_BASE64 secret exists)
         if: env.SIGN_ENABLED == 'true'

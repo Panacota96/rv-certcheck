@@ -1,10 +1,8 @@
-//! Domain logic — THE PART EACH NEW TOOL REPLACES.
-//!
-//! This reference analyzer inventories evidence: it detects the real file type from its
-//! signature (magic bytes), flags extension mismatches, executables under other names and
-//! empty files. Duplicates are found later, across items, by `run.rs`.
-//! A new tool keeps the same `analyze` signature and `Finding` shape so the rest of the
-//! pipeline (audit, reports, CLI, GUI) works unchanged.
+//! Finding shape shared by the whole pipeline, and the inventory analysis that every item gets first: the real
+//! file type from its signature (magic bytes), extension mismatches, executables under other names and empty
+//! files. Cryptographic content is then analysed by `certscan` (which drops the extension checks for
+//! certificates, keys and tokens); anything else keeps only this inventory. Duplicates are found across items
+//! by `run.rs`.
 
 use serde::Serialize;
 use std::collections::BTreeMap;

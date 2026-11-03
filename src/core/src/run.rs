@@ -1,13 +1,15 @@
-//! The pipeline both front-ends call: intake → hash + analyze each item → duplicates →
-//! hashes.csv → per-item reports → statistics report. Every step is written to the audit log.
+//! The pipeline both front-ends call: intake → hash + analyze each item (certscan: sniff, parse) → duplicates →
+//! certificate stage across items (chains, revocation, tokens, keys) → hashes.csv → per-item reports →
+//! statistics report. Every step is written to the audit log.
 //!
 //! With `case_dir` the run works inside a shared case folder (see `case.rs`): outputs go to
 //! `<CASE>/runs/<tool>/<RUN-ID>/`, the case log records run_started / run_finished, and depending on
 //! [`CaseRole`] every item is registered (intake) or verified against the registry (analysis).
 
-use crate::analyzer::{Finding, Severity, analyze};
+use crate::analyzer::{Finding, Severity};
 use crate::audit::AuditLog;
 use crate::case::{self, Case, CaseRole, Comparison, Registration, Writer};
+use crate::certscan::{self, CertOptions, ItemScan};
 use crate::events::{Event, eta_ms};
 use crate::hash::{HashAlgo, hash_bytes, hash_reader, validate_selection};
 use crate::input::collect;
@@ -51,6 +53,8 @@ pub struct RunConfig {
     pub evidence_ids: Vec<String>,
     /// Intake (registers evidence) or analysis (verifies against the registry). Default: [`crate::CASE_ROLE`].
     pub case_role: CaseRole,
+    /// Certificate analysis options (`--anchor --at --purpose --crl --ocsp --online`, PKCS#12 password).
+    pub cert: CertOptions,
 }
 
 impl Default for RunConfig {
@@ -76,6 +80,7 @@ impl Default for RunConfig {
             case_dir: None,
             evidence_ids: vec![],
             case_role: crate::CASE_ROLE,
+            cert: CertOptions::default(),
         }
     }
 }
@@ -353,12 +358,14 @@ fn pipeline(
         log.record(action, None, details.clone()).map_err(io)?;
     }
 
-    let env_json = report::pretty(&crate::env::describe(
+    let mut env = crate::env::describe(
         &cfg.tool_name,
         &cfg.tool_version,
         &cfg.frontend,
         &cfg.command_line,
-    ));
+    );
+    env["certificate_layer"] = certscan::environment();
+    let env_json = report::pretty(&env);
     let (_, env_digest) =
         report::write_hashed(&log_dir, "environment.json", &env_json, &cfg.algorithms)?;
     log.record("environment_recorded", Some("environment.json"), env_digest)
@@ -382,6 +389,20 @@ fn pipeline(
                     return Err(e);
                 }
             }
+        }
+    };
+
+    // Certificate options: anchors, --crl / --ocsp files (read and hashed once), validation time and purpose.
+    let prepared = match certscan::prepare(&cfg.cert) {
+        Ok((p, details)) => {
+            log.record("validation_options", None, details)
+                .map_err(io)?;
+            p
+        }
+        Err(e) => {
+            log.record("run_failed", None, json!({"reason": e}))
+                .map_err(io)?;
+            return Err(e);
         }
     };
 
@@ -415,6 +436,7 @@ fn pipeline(
     });
 
     let mut results: Vec<ItemResult> = Vec::with_capacity(items.len());
+    let mut scans: Vec<ItemScan> = Vec::with_capacity(items.len());
     let mut hashed_seq: BTreeMap<u64, u64> = BTreeMap::new();
     let mut bytes_before = 0u64;
     let mut errors = 0u64;
@@ -478,7 +500,10 @@ fn pipeline(
             evidence_id: None,
             case_status: None,
             intake_utc: None,
+            outputs: vec![],
+            details: Value::Null,
         };
+        let mut scan = ItemScan::default();
         match outcome {
             Ok(None) => {
                 log.record(
@@ -506,7 +531,17 @@ fn pipeline(
                     path: path_s.clone(),
                     hashes,
                 });
-                let a = analyze(&result.file_name(), out.bytes, &out.head);
+                // Second, read-only pass by the certificate layer (the whole item is needed to parse it); the
+                // bytes read are re-hashed and compared with the first pass.
+                let (a, s) = certscan::analyze_item(
+                    &item.path,
+                    &result.file_name(),
+                    out.bytes,
+                    &out.head,
+                    out.digests.first().map(|(a, h)| (*a, h.as_str())),
+                    &cfg.cert,
+                );
+                scan = s;
                 result.size = out.bytes;
                 result.hashes = out.digests;
                 result.detected_type = a.detected_type;
@@ -535,7 +570,7 @@ fn pipeline(
             }
         }
         let codes: Vec<String> = result.findings.iter().map(|f| f.code.clone()).collect();
-        result.audit_last_seq = log.record("item_analyzed", Some(&path_s), json!({"index": item.index, "detected_type": result.detected_type, "extension": result.extension, "findings": result.findings, "status": result.status()})).map_err(io)?;
+        result.audit_last_seq = log.record("item_analyzed", Some(&path_s), json!({"index": item.index, "detected_type": result.detected_type, "extension": result.extension, "findings": result.findings, "status": result.status(), "crypto_kind": scan.kind.map(|k| k.name()), "evidence_rehash": scan.rehash})).map_err(io)?;
         sink(&Event::ItemFinished {
             index: item.index,
             path: path_s,
@@ -553,6 +588,7 @@ fn pipeline(
             eta_ms: eta_ms(elapsed, bytes_before, total_bytes),
         });
         results.push(result);
+        scans.push(scan);
     }
     if cancelled {
         log.record(
@@ -591,6 +627,61 @@ fn pipeline(
                     .with("others", crate::report::capped_list(&others, 10)),
             );
         }
+    }
+
+    // Certificate stage across items: every certificate of the run completes paths, every CRL / OCSP response
+    // of the run is a revocation source; chain.json and certificate.txt are written, hashed and audited.
+    let outputs = {
+        let mut stage: Vec<certscan::StageItem> = results
+            .iter_mut()
+            .zip(scans.iter_mut())
+            .map(|(r, s)| certscan::StageItem {
+                index: r.index,
+                file_name: r.file_name(),
+                scan: s,
+                findings: &mut r.findings,
+            })
+            .collect();
+        certscan::cross_item_stage(&mut stage, &prepared, &cfg.cert)
+    };
+    for (r, o) in results.iter_mut().zip(outputs) {
+        if o.files.is_empty() {
+            continue;
+        }
+        let path_s = r.path.display().to_string();
+        let dir = report_dir.join("items").join(r.folder());
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("cannot create {}: {}", dir.display(), e))?;
+        for (name, data) in &o.files {
+            let (_, digest) = report::write_hashed(&dir, name, data, &cfg.algorithms)?;
+            let hashes: BTreeMap<String, String> = digest
+                .as_object()
+                .map(|m| {
+                    m.iter()
+                        .map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let kind = if name == "chain.json" {
+                "chain"
+            } else {
+                "certificate_text"
+            };
+            log.record("output_written", Some(&path_s), json!({"index": r.index, "kind": kind, "file": format!("items/{}/{}", r.folder(), name), "digest": digest})).map_err(io)?;
+            r.outputs.push(report::OutputRecord {
+                rel_path: name.clone(),
+                kind: kind.into(),
+                bytes: data.len() as u64,
+                hashes,
+            });
+        }
+        log.record(
+            "item_certificates_checked",
+            Some(&path_s),
+            json!({"index": r.index, "summary": o.details, "status": r.status()}),
+        )
+        .map_err(io)?;
+        r.details = o.details;
     }
 
     // hashes.csv: the hash register of every reviewed file.
@@ -962,7 +1053,9 @@ mod tests {
         .unwrap();
         assert_eq!(s.items, 3);
         assert_eq!(s.medium, 1); // extension mismatch
-        assert_eq!(s.info, 2); // duplicate pair
+        // Duplicate pair, plus one certificate-layer info per item (ANALYSIS_NOT_IMPLEMENTED while it is a stub,
+        // CRYPTO_INPUT_NOT_RECOGNISED once sniffing is implemented).
+        assert_eq!(s.info, 5);
         assert!(crate::audit::verify(&s.log_dir.join("audit.jsonl")).is_ok());
         for f in ["audit.log", "hashes.csv", "environment.json"] {
             assert!(s.log_dir.join(f).exists(), "{}", f);
@@ -1010,8 +1103,58 @@ mod tests {
         assert!(log.contains("\"run_cancelled\""));
     }
 
+    /// The certificate glue writes chain.json for every cryptographic item (also while the layer is a stub),
+    /// hashes it, audits it (output_written) and lists it in technical.json.
+    #[test]
+    fn certificate_item_gets_hashed_chain_json() {
+        let out = tempfile::tempdir().unwrap();
+        let leaf =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/openssl/leaf.crt");
+        let s = run(
+            &cfg(leaf, out.path().into()),
+            &mut |_| {},
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let item = s.report_dir.join("items/00001-leaf.crt");
+        let chain: Value =
+            serde_json::from_str(&std::fs::read_to_string(item.join("chain.json")).unwrap())
+                .unwrap();
+        assert_eq!(chain["schema"], certscan::SCHEMA_CHAIN);
+        let tech: Value =
+            serde_json::from_str(&std::fs::read_to_string(item.join("technical.json")).unwrap())
+                .unwrap();
+        let outputs = tech["outputs"].as_array().unwrap();
+        assert_eq!(outputs[0]["rel_path"], "chain.json");
+        assert_eq!(
+            outputs[0]["hashes"]["sha256"].as_str().unwrap(),
+            hash_bytes(
+                &std::fs::read(item.join("chain.json")).unwrap(),
+                HashAlgo::Sha256
+            )
+        );
+        let audit = std::fs::read_to_string(s.log_dir.join("audit.jsonl")).unwrap();
+        for action in [
+            "\"validation_options\"",
+            "\"output_written\"",
+            "\"item_certificates_checked\"",
+        ] {
+            assert!(audit.contains(action), "{action}");
+        }
+        assert!(crate::audit::verify(&s.log_dir.join("audit.jsonl")).is_ok());
+    }
+
+    #[test]
+    fn online_is_refused_and_audited() {
+        let out = tempfile::tempdir().unwrap();
+        let mut c = cfg(PathBuf::from("."), out.path().into());
+        c.cert.validation.online = true;
+        let e = run(&c, &mut |_| {}, &AtomicBool::new(false)).unwrap_err();
+        assert!(e.contains("--online"), "{e}");
+    }
+
     fn sample_copy(dir: &Path) -> PathBuf {
-        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/sample/evidence");
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/inventory");
         let ev = dir.join("evidence");
         std::fs::create_dir_all(&ev).unwrap();
         for e in std::fs::read_dir(src).unwrap() {

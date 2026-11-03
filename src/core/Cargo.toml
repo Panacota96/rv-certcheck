@@ -1,9 +1,10 @@
 [package]
 name = "rv-certcheck-core"
-description = "RV CertCheck core: evidence intake, dual hashing, audit chain, analysis and reports"
+description = "RV CertCheck core: evidence intake, dual hashing, audit chain, certificate analysis glue and reports"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 build = "build.rs"
@@ -13,6 +14,7 @@ name = "rv_certcheck_core"
 path = "src/lib.rs"
 
 [dependencies]
+rv-certcheck-certs.workspace = true
 md-5.workspace = true
 sha1.workspace = true
 sha2.workspace = true

@@ -1,0 +1,44 @@
+[package]
+name = "rv-certcheck-certs"
+description = "RV CertCheck certificate layer: analysis (parsing, chains, revocation, timestamps, trust lists) and creation (Rakvor PKI, CSRs, lab sets, PKCS#11)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[lib]
+name = "rv_certcheck_certs"
+path = "src/lib.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sha1.workspace = true
+chrono.workspace = true
+zeroize.workspace = true
+openssl.workspace = true
+pem.workspace = true
+# Analysis (agent A)
+x509-parser.workspace = true
+x509-cert.workspace = true
+x509-tsp.workspace = true
+cms.workspace = true
+der.workspace = true
+const-oid.workspace = true
+quick-xml.workspace = true
+p12-keystore.workspace = true
+# Creation (agent B)
+rcgen.workspace = true
+time.workspace = true
+x509-ocsp.workspace = true
+cryptoki.workspace = true
+rsa.workspace = true
+rand_chacha.workspace = true
+rand_core.workspace = true
+spki.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

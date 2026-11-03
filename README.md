@@ -65,11 +65,11 @@ cargo build --release
 rv-certcheck self-test
 
 # Review a folder with SHA-256 + MD5, reports in Spanish, for case CASE-2026-014
-rv-certcheck scan -i D:\evidence -r --hash sha256,md5 --lang es --case CASE-2026-014 --actor "Ana Ruiz"
+rv-certcheck analyze -i D:\evidence -r --hash sha256,md5 --lang es --case CASE-2026-014 --actor "Ana Ruiz"
 
 # French case: custody form in French + English, every PDF signed with your certificate
 $env:RV_SIGN_PASSWORD = Read-Host -AsSecureString | ConvertFrom-SecureString -AsPlainText
-rv-certcheck scan -i D:\evidence -r --jurisdiction fr --sign-cert C:\certs\examiner.p12 --lang fr
+rv-certcheck analyze -i D:\evidence -r --jurisdiction fr --sign-cert C:\certs\examiner.p12 --lang fr
 
 # Later, prove the log was not altered (also checks the RFC 3161 timestamp)
 rv-certcheck verify-log rakvor-out\logs\<RUN-ID>

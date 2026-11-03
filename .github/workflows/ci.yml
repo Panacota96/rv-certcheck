@@ -26,6 +26,10 @@ jobs:
         run: rustup toolchain install && rustc --version
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
+      - name: Dependency licences and sources (cargo-deny; no GPL/AGPL/LGPL)
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses bans sources
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - name: actionlint
         run: |
@@ -45,6 +49,13 @@ jobs:
       - name: Rust toolchain pinned in rust-toolchain.toml (channel and components)
         run: rustup toolchain install && rustc --version
       - uses: Swatinem/rust-cache@v2
+      - name: Strawberry Perl for the vendored OpenSSL build (Git Bash's perl cannot configure OpenSSL for MSVC; no NASM needed, openssl-src builds no-asm without it)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $perl = "C:\Strawberry\perl\bin\perl.exe"
+          if (-not (Test-Path $perl)) { choco install strawberryperl -y --no-progress }
+          "OPENSSL_SRC_PERL=$perl" >> $env:GITHUB_ENV
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -64,9 +75,12 @@ jobs:
           fi
       - name: Self-test of the hash implementations
         run: cargo run --locked -q -p rv-certcheck-cli -- self-test
-      - name: Sample run
+      - name: Sample run (exit 0, or 3 when the sample's expired / revoked / wrong-root certificates are reported)
         shell: bash
-        run: cargo run --locked -q -p rv-certcheck-cli -- scan -i examples/sample/evidence --hash sha256,blake3 --lang all --out ci-out --progress none --no-timestamp
+        run: |
+          code=0
+          cargo run --locked -q -p rv-certcheck-cli -- analyze -i examples/sample/evidence --anchor examples/sample/anchors/rakvor-lab-root.crt --at 2026-06-01T00:00:00Z --hash sha256,blake3 --lang all --out ci-out --progress none --no-timestamp || code=$?
+          test "$code" -eq 0 || test "$code" -eq 3
       - name: Cross-language verification (Python re-checks the chain, hashes and JSON schemas)
         shell: bash
         run: |
@@ -96,7 +110,7 @@ jobs:
         continue-on-error: true
         shell: bash
         run: |
-          cargo run --locked -q -p rv-certcheck-cli -- scan -i examples/sample/evidence --out tsa-out --progress none | tee tsa.txt
+          cargo run --locked -q -p rv-certcheck-cli -- analyze -i examples/sample/evidence --anchor examples/sample/anchors/rakvor-lab-root.crt --at 2026-06-01T00:00:00Z --out tsa-out --progress none | tee tsa.txt
           grep -q "timestamp: ok" tsa.txt
           run=$(find tsa-out/logs -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort | tail -n 1)
           cargo run --locked -q -p rv-certcheck-cli -- verify-log "tsa-out/logs/$run"

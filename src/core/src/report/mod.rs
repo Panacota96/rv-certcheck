@@ -20,13 +20,9 @@ pub const SCHEMA_STATISTICS: &str = "rakvor.statistics/1";
 pub const SCHEMA_TECHNICAL: &str = "rakvor.item-technical/1";
 pub const SCHEMA_SUMMARY: &str = "rakvor.item-summary/1";
 
-/// Run-level limitations, always printed (what this tool cannot tell you).
-pub const LIMITATIONS: [&str; 4] = [
-    "SIGNATURE_TABLE_LIMITED",
-    "TIMESTAMPS_FROM_FILESYSTEM",
-    "CLEAN_RESULT_IS_NOT_AUTHENTICITY",
-    "TIMESTAMP_PROVES_EXISTENCE_ONLY",
-];
+/// Run-level limitations, always printed (what this tool cannot tell you). Owned by the certificate layer's
+/// catalogue (`rv_certcheck_certs::codes::LIMITATIONS`), worded in i18n.
+pub const LIMITATIONS: &[&str] = rv_certcheck_certs::codes::LIMITATIONS;
 pub const SCHEMA_CUSTODY: &str = "rakvor.item-custody/1";
 const BLANK_TRANSFER_ROWS: usize = 6;
 
@@ -107,6 +103,21 @@ pub struct ItemResult {
     /// registered | already_registered | verified | mismatch | not_in_registry
     pub case_status: Option<String>,
     pub intake_utc: Option<String>,
+    /// Files the analysis wrote in the item folder (chain.json, certificate.txt), hashed and audited.
+    pub outputs: Vec<OutputRecord>,
+    /// Certificate-analysis summary for technical.json (kind, verdicts, failed steps). Null if none.
+    pub details: Value,
+}
+
+/// One analysis output in the item folder.
+#[derive(Clone, Debug, serde::Serialize, PartialEq)]
+pub struct OutputRecord {
+    /// Relative to the item folder (`chain.json`).
+    pub rel_path: String,
+    /// `chain` | `certificate_text`
+    pub kind: String,
+    pub bytes: u64,
+    pub hashes: BTreeMap<String, String>,
 }
 
 impl ItemResult {
@@ -501,6 +512,8 @@ pub fn technical_json(run: &RunInfo, it: &ItemResult) -> Value {
         "hashes": it.hashes.iter().map(|(a, h)| (a.name().to_string(), json!(h))).collect::<serde_json::Map<_, _>>(),
         "findings": findings_json(it, &run.langs),
         "limitations": LIMITATIONS,
+        "certificates": it.details,
+        "outputs": it.outputs,
         "audit": {"first_seq": it.audit_first_seq, "last_seq": it.audit_last_seq},
     })
 }
