@@ -484,4 +484,33 @@ mod tests {
         assert_eq!(first_valid_spki(&alg, &octet(&raw)).unwrap(), want);
         assert_eq!(first_valid_spki(&alg, &raw).unwrap(), want);
     }
+
+    /// Regression: a raw point (0x04 || X || Y) read as a TLV has a random "length" byte; when it looked like a
+    /// long-form header the reader indexed past the end and panicked (seen with ~1 key in 3).
+    #[test]
+    fn ec_points_never_panic_for_many_random_keys() {
+        let group =
+            openssl::ec::EcGroup::from_curve_name(openssl::nid::Nid::X9_62_PRIME256V1).unwrap();
+        let alg = seq(&[oid(OID_EC_PUBLIC_KEY), oid(OID_P256)]);
+        let mut ctx = openssl::bn::BigNumContext::new().unwrap();
+        for _ in 0..200 {
+            let k = openssl::ec::EcKey::generate(&group).unwrap();
+            let raw = k
+                .public_key()
+                .to_bytes(
+                    &group,
+                    openssl::ec::PointConversionForm::UNCOMPRESSED,
+                    &mut ctx,
+                )
+                .unwrap();
+            let want = openssl::pkey::PKey::from_ec_key(k)
+                .unwrap()
+                .public_key_to_der()
+                .unwrap();
+            assert_eq!(first_valid_spki(&alg, &raw).unwrap(), want);
+            assert_eq!(first_valid_spki(&alg, &octet(&raw)).unwrap(), want);
+        }
+        assert!(super::super::derw::content_of(&[0x04, 0x85, 0x01]).is_empty());
+        assert!(super::super::derw::content_of(&[0x30, 0x80]).is_empty());
+    }
 }

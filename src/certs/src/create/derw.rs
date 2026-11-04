@@ -165,7 +165,8 @@ pub fn implicit_cons(n: u8, content: &[u8]) -> Vec<u8> {
     tlv(0xa0 | n, content)
 }
 
-/// The content octets of a complete TLV (no validation beyond the length header).
+/// The content octets of a TLV. Never panics: a truncated or malformed length header (including bytes that
+/// are not DER at all, such as a raw EC point from a token) gives the bytes that are present, or nothing.
 pub fn content_of(der: &[u8]) -> &[u8] {
     if der.len() < 2 {
         return &[];
@@ -175,11 +176,16 @@ pub fn content_of(der: &[u8]) -> &[u8] {
         &der[2..(2 + l).min(der.len())]
     } else {
         let n = l & 0x7f;
+        // Long form: 1..=8 length octets, all present; anything else is not a usable length.
+        if n == 0 || n > std::mem::size_of::<usize>() || der.len() < 2 + n {
+            return &[];
+        }
         let mut len = 0usize;
         for b in &der[2..2 + n] {
             len = (len << 8) | *b as usize;
         }
-        &der[2 + n..(2 + n + len).min(der.len())]
+        let start = 2 + n;
+        &der[start..start.saturating_add(len).min(der.len())]
     }
 }
 

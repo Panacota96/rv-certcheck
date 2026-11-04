@@ -208,7 +208,7 @@ The `.p12` (`E:\examiners\<SERIAL>.p12`) holds the key, the examiner certificate
 Hand it over in person with the password given separately. The examiner signs reports with:
 
 ```powershell
-rv-hashinv --input D:\evidence --sign-cert ana-ruiz.p12 --sign-pass-env RV_SIGN_PASSWORD ...
+rv-hashinv scan --input D:\evidence --sign-cert ana-ruiz.p12 --sign-pass-env RV_SIGN_PASSWORD ...
 ```
 
 rv-hashinv signs PDFs with RSA keys only: keep `--key-type rsa-2048`, `rsa-3072` or `rsa-4096` for examiners.
