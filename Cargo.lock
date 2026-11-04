@@ -3502,6 +3502,7 @@ dependencies = [
  "spki 0.7.3",
  "tempfile",
  "time",
+ "ureq",
  "x509-cert 0.2.5",
  "x509-ocsp",
  "x509-parser",

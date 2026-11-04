@@ -53,7 +53,8 @@
     },
     "leaf-wrong-root.crt": {
       "expected": [
-        "CERT_CHAIN_UNTRUSTED"
+        "CERT_CHAIN_UNTRUSTED",
+        "REVOCATION_UNKNOWN"
       ],
       "forbidden": [
         "CERT_CHAIN_VALID"
@@ -61,13 +62,15 @@
     },
     "leaf-rsa1024.crt": {
       "expected": [
-        "CERT_WEAK_KEY"
+        "CERT_WEAK_KEY",
+        "CERT_CHAIN_VALID"
       ],
       "forbidden": []
     },
     "leaf-sha1.crt": {
       "expected": [
-        "CERT_WEAK_SIGNATURE_ALGORITHM"
+        "CERT_WEAK_SIGNATURE_ALGORITHM",
+        "CERT_CHAIN_VALID"
       ],
       "forbidden": []
     },
@@ -93,7 +96,8 @@
     },
     "data.tsr": {
       "expected": [
-        "TIMESTAMP_TOKEN_VALID"
+        "TIMESTAMP_TOKEN_VALID",
+        "CERT_CHAIN_VALID"
       ],
       "forbidden": [
         "TIMESTAMP_TOKEN_INVALID"

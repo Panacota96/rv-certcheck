@@ -29,6 +29,8 @@ cms.workspace = true
 der.workspace = true
 const-oid.workspace = true
 quick-xml.workspace = true
+# `--online` CRL / OCSP fetching (agent A; already a workspace dependency, used by core for RFC 3161).
+ureq.workspace = true
 p12-keystore.workspace = true
 # Creation (agent B)
 rcgen.workspace = true

@@ -919,6 +919,10 @@ pub struct ChainNode {
     pub anchor: Option<String>,
     pub revocation: Option<RevocationStatus>,
     pub trust_list: Option<TrustListMatch>,
+    /// Added by agent A (defaulted): why a `Good` revocation status needs reading with care, e.g. "revoked on
+    /// 2026-07-01, after the date checked" or "CRL issued after the date checked".
+    #[serde(default)]
+    pub revocation_note: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -957,6 +961,32 @@ pub struct ChainVerdict {
     pub signals: Vec<Signal>,
     /// `OpenSSL 3.x.y ...` as linked (environment.json also records it).
     pub openssl_version: String,
+    /// Added by agent A (defaulted): every URL fetched with `--online` for this chain (CRL distribution points,
+    /// OCSP responders), with the response SHA-256 and the time, for core's audit log. Empty offline.
+    #[serde(default)]
+    pub online_fetches: Vec<OnlineFetch>,
+    /// Added by agent A (defaulted): how the verdict was reached where it is not obvious from the codes (which
+    /// OpenSSL CRL flags were used, where the error walk stopped, how `--at signing-time` was resolved, the
+    /// tool's own policy checks).
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
+
+/// One URL fetched by `--online` (no cache; 15 s timeout). Added by agent A.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OnlineFetch {
+    /// `crl` | `ocsp`
+    pub kind: String,
+    pub url: String,
+    /// Subject of the certificate whose status was asked for.
+    pub for_subject: String,
+    /// When the request was sent (RFC 3339).
+    pub fetched_utc: String,
+    pub http_status: Option<u16>,
+    pub bytes: u64,
+    /// SHA-256 of the response body (None when nothing was received).
+    pub sha256: Option<String>,
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rakvor.example/schemas/trustlist-co.schema.json",
+  "title": "Rakvor curated Colombian trust list: one CSV row",
+  "description": "The curated CSV of ONAC-accredited entidades de certificación digital (ECD) imported by `rv-certcheck trust-list import --list co`. The file is RFC 4180 CSV, UTF-8 (optional BOM), whose header is exactly these nine column names (any order); each row, read as an object keyed by the header, must validate against this schema. One row is one status period of one service (ecd_name + service_name + service_type); a service with several CA certificates has one row per certificate. Implementation and full rules: src/certs/src/trustlist/co.rs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ecd_name",
+    "service_name",
+    "service_type",
+    "status",
+    "status_from",
+    "status_until",
+    "certificate_pem_or_b64",
+    "source_url",
+    "checked_utc"
+  ],
+  "$defs": {
+    "time": {
+      "type": "string",
+      "description": "RFC 3339 (2025-01-01T00:00:00Z, any offset; converted to UTC) or a date YYYY-MM-DD (midnight UTC).",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}([Tt ]\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?([Zz]|[+-]\\d{2}:\\d{2}))?$"
+    }
+  },
+  "properties": {
+    "ecd_name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The ECD (trust service provider) as accredited by ONAC."
+    },
+    "service_name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The accredited service."
+    },
+    "service_type": {
+      "type": "string",
+      "minLength": 1,
+      "description": "CA/QC (issues certificates for firma digital), TSA (estampado cronológico) or another short type.",
+      "examples": ["CA/QC", "TSA"]
+    },
+    "status": {
+      "enum": ["accredited", "suspended", "withdrawn"]
+    },
+    "status_from": {
+      "$ref": "#/$defs/time"
+    },
+    "status_until": {
+      "description": "End of the status period; empty when still current.",
+      "anyOf": [{ "const": "" }, { "$ref": "#/$defs/time" }]
+    },
+    "certificate_pem_or_b64": {
+      "type": "string",
+      "description": "One CA certificate: a PEM block (quoted, newlines allowed) or base64 DER on one line. Empty for a row that only records a status period.",
+      "anyOf": [
+        { "const": "" },
+        { "pattern": "^\\s*-----BEGIN (X509 |TRUSTED )?CERTIFICATE-----" },
+        { "pattern": "^[A-Za-z0-9+/=\\s]+$" }
+      ]
+    },
+    "source_url": {
+      "type": "string",
+      "description": "Where the accreditation was checked (the ONAC page).",
+      "pattern": "^https?://"
+    },
+    "checked_utc": {
+      "$ref": "#/$defs/time",
+      "description": "When the curator checked the row. The snapshot's issue_date is the latest of these."
+    }
+  }
+}

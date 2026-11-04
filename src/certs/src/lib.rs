@@ -368,23 +368,7 @@ mod tests {
             }
         }
         let d = Path::new("does-not-exist");
-        let opts = ValidationOptions::default();
-        let req = ChainRequest::default();
-        assert!(ni(sniff(b"")));
-        assert!(ni(parse_any(b"", None)));
-        assert!(ni(certificate_text(b"")));
-        assert!(ni(resolve_anchors(&[], None)));
-        assert!(ni(validate_chain(&req, &opts)));
-        assert!(ni(check_revocation(
-            b"",
-            b"",
-            &[],
-            &[],
-            "2026-01-01T00:00:00Z"
-        )));
-        assert!(ni(verify_timestamp_token(b"", None, &req, &opts)));
-        assert!(ni(match_key(b"", None, b"")));
-        assert!(ni(trust_list::list(d)));
+        // Agent A's lines removed: the analysis functions are implemented.
         assert!(ni(pki::open(d)));
         assert!(ni(csr::show(b"")));
         assert!(ni(tokens::list(d)));
