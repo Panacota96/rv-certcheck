@@ -1,17 +1,12 @@
-<!--
-  Template note for the docs agent of a tool scaffolded from rv-certcheck: sections 1, 2.3, 3 (shared rows), 6, 7,
-  8 and the shared troubleshooting tables apply to every Rakvor tool. Rewrite the parts between forge:domain
-  markers: the walkthrough steps that show what THIS tool does in the case (intake here; analysis in a new tool),
-  the domain outputs, the findings table and the domain messages.
--->
-
-# Usage guide: from intake to a verified case
+# Usage guide: analysing certificate evidence, and creating certificates
 
 This is the end-to-end guide for an examiner. It walks through one case, explains every output, says how to read
-each finding, and how to prove afterwards that nothing changed. Option lists are not repeated here:
+each finding, and how to show afterwards that nothing changed; then it covers the creation side. Option lists are
+not repeated here:
 
 - every command, option, default, example and exit code: [usage-cli.md](usage-cli.md) (generated from `--help`);
-- the desktop app, window by window: [usage-gui.md](usage-gui.md);
+- the desktop app: [usage-gui.md](usage-gui.md);
+- Rakvor's own PKI step by step: [company-pki.md](company-pki.md);
 - the case folder contract: [case-folder.md](case-folder.md);
 - why each check works: [theory.md](theory.md); legal weight: [admissibility.md](admissibility.md);
 - installing and verifying the tool: [installation.md](installation.md).
@@ -20,21 +15,20 @@ each finding, and how to prove afterwards that nothing changed. Option lists are
 sequenceDiagram
     autonumber
     actor X as Examiner
-    participant H as rv-certcheck (intake)
+    participant H as rv-hashinv (intake)
     participant C as Case folder
-    participant P as Analysis tool (e.g. rv-pdfauth)
+    participant V as rv-certcheck (analysis)
     participant T as TSA
-    X->>H: analyze --case-dir CASE --case ID -i E:\export
-    H->>C: case.json, registry E0001…, case-log run_started / evidence_registered
-    H->>T: audit chain head
-    T-->>H: RFC 3161 token
-    H->>C: runs/rv-certcheck/RUN-ID, case-log run_finished
-    X->>P: analyze --case-dir CASE
-    P->>C: re-hash every item, compare with the registry
-    P->>C: runs/rv-pdfauth/RUN-ID, case-log run_started / run_finished
-    X->>H: verify-case CASE
-    H-->>X: OK, case-log entries, registered items, runs verified
-    X->>X: OpenSSL token check, report re-hash, sign and file
+    X->>H: scan --case-dir CASE --case ID -i E:\export
+    H->>C: case.json, registry E0001…, case-log entries
+    X->>V: analyze --case-dir CASE --anchor ROOT --at DATE --crl CA.crl
+    V->>C: re-hash every item, compare with the registry
+    V->>V: recognise, parse, validate chains, revocation, tokens, keys
+    V->>T: audit chain head
+    T-->>V: RFC 3161 token
+    V->>C: runs/rv-certcheck/RUN-ID (chain.json per item), case-log run_finished
+    X->>V: verify-case CASE --rehash
+    X->>X: openssl verify on relied-on verdicts, sign and file
 ```
 
 ## 1. Before you start
@@ -43,107 +37,85 @@ sequenceDiagram
 | --- | --- | --- |
 | Work on a **verified copy** (forensic image, write-blocked export), never the original media | The tool is read-only in software, not a write blocker | Imaging tool + write blocker; note model and serial |
 | The installed tool is the genuine release | Court question: "how do you know what you ran?" | [installation.md](installation.md) steps 2–4 and 6 |
-| Hash policy | MD5/SHA-1 alone are not collision-resistant | Always include `sha256` (or `sha512`): `--hash sha256,md5` when an older record uses MD5 |
+| **Anchors** | Nothing is trusted unless you say so | Obtain each root from its CA's official repository (or an EU trusted list / the curated Colombian CSV); record where it came from |
+| **The instant** | A chain is judged at one instant | The signing date, from a timestamp token or another reliable record; `--at signing-time` is not usable in v0.1 (falls back to now) |
+| **Revocation data** | Offline, only supplied CRLs / OCSP count | The CA's CRL covering the instant (`--crl`), an OCSP response (`--ocsp`), or `--online` on a connected machine (every URL audited) |
+| **Purpose** | A certificate is checked for one use | `--purpose document-signing` for signed documents, `code-signing` for software, `tls-server` for web sites, `timestamping` for a TSA |
+| Hash policy | MD5/SHA-1 alone are not collision-resistant | Always include `sha256`: `--hash sha256,md5` when an older record uses MD5 |
+| PKCS#12 password | Key stores in evidence may be protected | `RV_P12_PASSWORD` (or `--p12-pass-env VAR`); never logged |
 | Clock | Audit times come from the workstation clock | Check Windows time sync before the run |
-| Jurisdiction | Selects the custody form | `--jurisdiction co` (default) or `fr`; in a case folder it is fixed at creation |
-| Timestamp | Online TSA by default | `--no-timestamp` offline, then `rv-certcheck timestamp` later; `--tsa-url` for a qualified / ECD TSA |
+| Timestamp of the log | Online TSA by default | `--no-timestamp` offline, then `rv-certcheck timestamp` later |
 | Examiner certificate | Signs every PDF report | `--sign-cert examiner.p12` ([signing](#7-signing-reports-with-the-examiner-certificate)) |
-| One case, one folder | Every tool of the case links to the same registry and case log | Create the case folder on the case volume, e.g. `D:\cases\CASE-2026-014` |
 
 ## 2. Case walkthrough
 
-The example case: `CASE-2026-014`, Colombian jurisdiction, examiner Ana Ruiz, a client export on `E:\export`
-(here: the three sample files). Command outputs below come from a real run of the sample against the local test
-TSA (`tests/fake_tsa.py`); paths are shortened.
+The example case: `CASE-2026-014`, a signed contract whose signer certificate, intermediate, CA CRL and an
+RFC 3161 token were exported by the client to `E:\export` and registered at intake by rv-hashinv. The outputs
+below use the lab sample (`examples/sample`), judged at 2026-06-01 against the lab root.
 
 <!-- forge:domain -->
-### 2.1 Intake: register the evidence
+### 2.1 Analysis: re-verify and analyse every registered item
 
 ```powershell
-rv-certcheck analyze --case-dir D:\cases\CASE-2026-014 --case CASE-2026-014 --jurisdiction co `
-    -i E:\export -r --hash sha256,md5 --actor "Ana Ruiz" --sign-cert C:\certs\ana-ruiz.p12
+rv-certcheck analyze --case-dir D:\cases\CASE-2026-014 `
+  --anchor D:\roots\lab-root.crt --at 2026-06-01T00:00:00Z --purpose any `
+  --hash sha256,md5 --lang es --actor "Ana Ruiz"
 ```
 
 ```text
-DONE  run 20261021T154339Z-6e298b
-  items: 3  bytes: 234  errors: 0  elapsed: 1.2 s
-  findings: high 0, medium 1, low 0, info 2
-  timestamp: ok 2026-10-21T15:43:40Z
-  report: D:\cases\CASE-2026-014\runs\rv-certcheck\20261021T154339Z-6e298b\reports\statistics.en.html
-  logs:   D:\cases\CASE-2026-014\runs\rv-certcheck\20261021T154339Z-6e298b\logs
-  case:   CASE-2026-014 (intake) registered 3 (new 3), verified 0, mismatched 0, not in registry 0
+DONE (high-severity findings)  run 20261104T154553Z-60bc38
+  items: 13  bytes: 18185  errors: 0  elapsed: 0.1 s
+  findings: high 4, medium 4, low 0, info 9
 ```
 
-What happened, in order: the case folder did not exist, so `case.json` was written once (`--case` and
-`--jurisdiction` are needed only now) and `case_created` opened the case log; `run_started` was appended to the
-case log; every file was hashed once with SHA-256 and MD5 and typed by its first bytes; the three files were
-registered as `E0001` (`acta-copia.txt`), `E0002` (`acta.txt`) and `E0003` (`foto-vacaciones.jpg`) — sorted by
-path — in `evidence\registry.json` / `.csv`, and `evidence_registered` recorded the new registry SHA-256 in the
-case log; reports and the custody form of each item now carry its evidence id; the audit chain head was
-timestamped; `run_finished` in the case log recorded the run's final audit head.
+With `--case-dir` a last line `case: CASE-2026-014 (analysis) registered 0 (new 0), verified …, mismatched …, not
+in registry …` gives the comparison with the registry.
 
-Re-running the same intake on unchanged files keeps the ids (`registered 3 (new 0)`). A changed file at a
-registered path gets a new id and `REGISTRY_PATH_CONTENT_CHANGED`. Use `-i` repeatedly, `-r` for subfolders, or
-`--input-list files.txt` (one path per line, `#` comments, relative paths from the list's folder).
+Exit code 3: four high findings (an expired, a revoked and a wrong-root certificate, and a key that is not its
+certificate's). For each item the tool:
 
-### 2.2 Analysis: later tools re-verify every item
+1. re-hashed the file and compared it with the registry (`evidence_verified_against_case`; a difference gives
+   `EVIDENCE_HASH_MISMATCH_WITH_CASE`, high, and the analysis still runs);
+2. read it a second time to parse it, and checked that this read has the same digest;
+3. recognised it by content (the `.crl`, `.tsr`, `.key` extensions play no part) and extracted every field;
+4. after all items: built and checked every end-entity certificate's chain with **every certificate of the run**
+   as possible intermediates and **every CRL and OCSP response of the run** as revocation sources, verified the
+   timestamp token, and matched the key with the certificates.
 
-Every Rakvor analysis tool (any tool scaffolded from this template, where `CASE_ROLE` is `analysis`) takes the same
-`--case-dir`. Without `-i` it examines every registered item; `--evidence E0001,E0003` selects some.
+Without `--anchor`, every chain is reported `CERT_CHAIN_UNTRUSTED`: that is the expected answer when nothing is
+trusted.
+
+### 2.2 Re-examine with another anchor, date or purpose
+
+The anchors, instant and purpose are the examiner's choices, recorded in each report. Re-run when the question
+changes, for example the same items at the signing date, for document signing, against an EU trust-list
+snapshot:
 
 ```powershell
-rv-pdfauth analyze --case-dir D:\cases\CASE-2026-014 --actor "Ana Ruiz" --sign-cert C:\certs\ana-ruiz.p12
+rv-certcheck trust-list import --list eu D:\tl\ES-TL-2026-06.xml
+rv-certcheck trust-list list
+rv-certcheck analyze --case-dir D:\cases\CASE-2026-014 --evidence E0003,E0004 `
+  --anchor tl:eu@latest --at 2025-03-14T09:30:00-05:00 --purpose document-signing --crl D:\rev\ca-2025-03.crl
 ```
 
-Before analysing each file, the tool re-hashes it (adding SHA-256 if your selection shares no algorithm with the
-registry, logged as `case_algorithm_added`) and compares it with the registry — by `--evidence` id, else by path,
-else by content. Its summary ends with a line such as
-`case: CASE-2026-014 (analysis) registered 0 (new 0), verified 3, mismatched 0, not in registry 0`. A file that no
-longer matches raises `EVIDENCE_HASH_MISMATCH_WITH_CASE` (high, exit code 3) and **is still analysed**, so the
-examiner can decide; a file never registered raises `EVIDENCE_NOT_IN_CASE_REGISTRY` (medium).
-
-> **rv-pdfauth at its current commit does not implement `--case-dir` yet** (its admissibility page lists this as
-> gap G24). Until it does, run it with `--out D:\cases\CASE-2026-014\runs\rv-pdfauth` and compare its `hashes.csv`
-> with `evidence\registry.csv` by SHA-256, as described in rv-pdfauth's own usage guide. Keep that output with the
-> case file.
+Each run is a new run folder; earlier runs are never changed.
 <!-- /forge:domain -->
 
 ### 2.3 Verify the whole case
 
 ```powershell
-rv-certcheck verify-case D:\cases\CASE-2026-014
-```
-
-```text
-OK  case CASE-2026-014: 4 case-log entries, 3 registered items, 1 runs verified: D:\cases\CASE-2026-014
-```
-
-Every Rakvor tool has `verify-case` and they agree (a case written by the Rust build verifies with the Python
-build and the reverse). It checks the case-log chain, `case.json`, the registry digest, every run's audit chain and
-timestamp tokens, and the cross-links between the case log and each run ([theory.md B7](theory.md#b7-the-case-folder)).
-Exit 0 = intact (warnings, such as a run still in progress, are printed), 3 = broken, 1 = not a case folder.
-By default it does not re-hash the evidence; add `--rehash` to read every registered item that is still reachable
-at its registered path and compare its digests with the registry (a path registered several times is compared with
-its latest registration):
-
-```text
 rv-certcheck verify-case D:\cases\CASE-2026-014 --rehash
-OK  case CASE-2026-014: 4 case-log entries, 3 registered items, 1 runs verified: D:\cases\CASE-2026-014
-    re-hashed 3 of 3 registered items: 3 match the registry
 ```
 
-A file that differs is listed as `E0002 <path>: sha256 differs from the registry (registered …, now …)` and the
-exit code is 3; a file not reachable from this workstation is a warning, not a failure.
+Every Rakvor tool has `verify-case` and they agree. It checks the case-log chain, `case.json`, the registry digest,
+every run's audit chain and timestamp tokens, and the cross-links between the case log and each run
+([case-folder.md](case-folder.md#how-a-reviewer-verifies-a-case)). Exit 0 = intact (warnings printed), 3 = broken,
+1 = not a case folder. `--rehash` also re-reads every registered item still reachable at its registered path.
 
 ### 2.4 The same from the desktop app
 
-Start **RV CertCheck**, fill **Case folder** in section 1 (and **Case ID** plus the custody form's jurisdiction for a
-new case), add the evidence (files, folders, drag and drop) — or none, to re-examine every registered item — tick
-one or two hash algorithms, set the report language and examiner in *3. Reports*, the timestamp and certificate in
-*4. Trust*, then **Start review**. The output folder is derived from the case folder and locked; the result panel
-lists every evidence id and its status. Every setting you change before starting is written to the run's audit log
-(`ui_*` actions). The engine, outputs and findings are the same as the CLI's. Details:
-[usage-gui.md](usage-gui.md).
+See [usage-gui.md](usage-gui.md). The engine, outputs and findings are the same as the CLI's; every setting
+changed before a run is written to its audit log (`ui_*` actions).
 
 ## 3. Reading the outputs
 
@@ -155,6 +127,8 @@ flowchart TB
     RUN --> L["logs/<br/>audit.jsonl · audit.log · hashes.csv<br/>environment.json · timestamp-NNNNN.tsr/.json"]
     RUN --> R["reports/<br/>statistics.json/.LANG.html/.LANG.pdf"]
     R --> I["items/NNNNN-name/"]
+    I --> CH["chain.json — verdicts per depth"]
+    I --> CT["certificate.txt — OpenSSL dump"]
     I --> T["technical.* — examiner, opposing expert"]
     I --> S["summary.* — client"]
     I --> K["custody.* — custody record"]
@@ -164,35 +138,49 @@ Without `--case-dir`, `logs\<RUN-ID>\` and `reports\<RUN-ID>\` are created under
 
 | Output | For | What to use it for |
 | --- | --- | --- |
-| `statistics.*` | Examiner, lawyer | Run overview: who, when, interface, algorithms, totals and throughput, findings by severity and code, items by detected type, duplicate groups (paths), the case-folder section (registered / added / verified / mismatched / not registered), timestamp status, signer, audit chain head and entry count at the time it was written |
-| `technical.*` | Examiner, opposing expert | One file: path, size, modification time, extension, detected type, status, evidence id and intake date (case folder), all digests, findings with *what it shows / what it does not prove*, method, audit entries `#first–#last`, limitations |
-| `summary.*` | Client | Plain-language status, the primary fingerprint, the findings in one sentence each, the next step |
-| `custody.*` | Custody record | Jurisdiction form (Spanish for `co`, French for `fr`) + English copy, pre-filled from the run, with 6 blank transfer rows to sign. An internal record, used **alongside** the official form ([admissibility.md](admissibility.md#consolidated-gap-list) G9) |
-| `audit.jsonl` / `audit.log` | Verification | Every action, hash-chained / the same, readable (not authoritative) |
-| `hashes.csv` | Verification | Hash register: `index,path,size,<algo1>[,<algo2>],status,error` |
-| `environment.json` | Reproducibility | Tool, compiler, every dependency version, OS, host, user, command line (or GUI settings) |
-| `timestamp-NNNNN.tsr` / `.json` | Verification | RFC 3161 response for audit entry NNNNN, and its summary |
-| `case.json`, `case-log.jsonl` | Verification | Case identity (written once); every tool run on the case, registry changes, final audit heads |
-| `evidence\registry.json` / `.csv` | Everyone | The evidence list of the case: id, path at intake, size, digests, which run registered it and when |
+| `chain.json` | Examiner, opposing expert | Per verdict: status, the instant used and how it was chosen (`at`, `at_source`), anchors, OpenSSL's first answer and **every** error with its depth, each node (certificate, OpenSSL code, anchor, revocation with source and dates, trust-list status), notes on how the verdict was reached, online fetches ([reports.md](reports.md#chainjson-schema-rakvorcert-chain1)) |
+| `certificate.txt` | Opposing expert | `openssl x509 -text`-style dump of every certificate, with its SHA-256 |
+| `statistics.*` | Examiner, lawyer | Run overview: who, when, totals, findings by severity and code, items by type, case-folder section, timestamp status, signer, audit head |
+| `technical.*` | Examiner, opposing expert | One item: path, size, type, digests, the certificate stage summary, findings with *what it shows / what it does not prove*, audit entries, limitations |
+| `summary.*` | Client | Plain-language status and findings, next step |
+| `custody.*` | Custody record | Jurisdiction form + English copy; an internal record used **alongside** the official form (G9) |
+| `audit.jsonl` | Verification | Every action, hash-chained, including `validation_options` (anchors and revocation files with SHA-256) |
+| `hashes.csv`, `environment.json`, `timestamp-*` | Verification | Hash register; versions (incl. OpenSSL); RFC 3161 token of the log |
 
-**Status and next step per item:** `problem` (a high finding: do not rely on the file until explained),
-`attention` (medium or low: review with the examiner), `ok` (informational only). **Exit code 3** means
-"completed, at least one high-severity finding" — a normal outcome for evidence, not an error.
+**Status per item:** `problem` (a high finding), `attention` (medium or low), `ok` (informational only). **Exit
+code 3** means "completed, at least one high-severity finding", a normal outcome for evidence.
+
+**Reading a verdict in `chain.json`, in this order:** `at` and `at_source` (is this the instant you meant?),
+`anchors` (did you trust what you meant to?), `status`, then `errors` (every OpenSSL error with its depth), then
+each node's `revocation` and `revocation_note`, then `notes` (CRL flags used, where the walk stopped, how
+`signing-time` was resolved, the tool's own policy checks).
 
 ## 4. Interpreting each finding
 
-Severity in brackets. "Check next" is what an examiner should do before relying on the finding; "do not
-conclude" is the overreach to avoid in a report. The exact wording printed in reports is in `i18n/en.json` (es, fr).
+"Check next" is what an examiner should do before relying on the finding; "do not conclude" is the overreach to
+avoid in a report. Severities and full wording: [reports.md](reports.md#findings-catalogue).
 
 <!-- forge:domain -->
 | Code | Check next | Do not conclude |
 | --- | --- | --- |
-| `EXTENSION_MISMATCH` (medium) | The detected type; open the file with a tool for that type; ask how the file was named at the source | Intent to hide anything — exports, downloads and messaging apps rename files |
-| `EXECUTABLE_CONTENT` (high) | Confirm with a PE/ELF parser (a 2-byte `MZ` match can be a false positive); treat as hostile; analyse in a sandbox | That the program is malicious, or that anyone ran it |
-| `EMPTY_FILE` (info) | Whether the source holds the file with content; the size at acquisition | That it was emptied on purpose |
-| `DUPLICATE` (info) | The group in `statistics.*` (paths) and `hashes.csv`; check the primary algorithm is SHA-256 | Who copied the file, when, or which copy is the original |
-| `UNREADABLE` (high) | The OS error (permissions, locks, path length); re-acquire and re-run; unreadable items are **not** registered | That the file is damaged or was hidden |
-| `REGISTRY_PATH_CONTENT_CHANGED` (medium) | Both evidence ids in `registry.csv`; which run registered each; how the source changed between intakes | Which version is the original, or why it changed |
+| `CERT_CHAIN_VALID` | The anchor named; `at`; any `REVOCATION_UNKNOWN`, weak-crypto or trust-list findings beside it; re-run with `openssl verify` | That the holder signed the document, or that the anchor deserves trust |
+| `CERT_CHAIN_UNTRUSTED` | The depth and OpenSSL code: a missing intermediate (add it to the run), the wrong anchor, or another error (24, 25, 34…) | That the certificate is false |
+| `CERT_SIGNATURE_INVALID` | Re-export the certificate; check it against the issuer the chain chose | Who altered it |
+| `CERT_EXPIRED_AT_DATE` / `CERT_NOT_YET_VALID_AT_DATE` | Whether `--at` is the signing time; time zones; re-run at the right instant | That a signature made earlier is invalid; back-dating |
+| `CERT_REVOKED` | The revocation date versus the signing date; the reason; the source (CRL or OCSP, SHA-256) | Wrongdoing by the holder; invalidity of earlier signatures |
+| `REVOCATION_UNKNOWN` | The reasons listed; obtain the CA's CRL for the date, an OCSP response, or use `--online` | Revoked, or not revoked |
+| `CERT_PURPOSE_MISMATCH` | The key usage and EKU printed; whether `--purpose` matches the use in the case | Deliberate misuse |
+| `CERT_NAME_CONSTRAINT_VIOLATION` | The name and the CA named | Malice |
+| `CERT_WEAK_KEY` / `CERT_WEAK_SIGNATURE_ALGORITHM` | The date of issue (common in older certificates) | That a key was broken or a certificate forged |
+| `CERT_SELF_SIGNED` | Whether it is a root you trust, or a stand-alone certificate | Untrustworthiness |
+| `CERT_IN_TRUST_LIST` | The **service type and the status at the date**; the snapshot date; verify the TL signature separately (v0.1) | Qualified status or legal validity |
+| `CERT_NOT_IN_TRUST_LIST` | Whether the right list and a current snapshot were used | Invalidity |
+| `CERT_ISSUED_BY_RAKVOR_INTERNAL` | Nothing: it discloses an internal certificate | Any legal presumption |
+| `KEY_MATCHES_CERTIFICATE` / `KEY_DOES_NOT_MATCH` / `KEY_NOT_PAIRED` | How the key was found; which certificate it was supplied with | Who used the key; tampering |
+| `TIMESTAMP_TOKEN_VALID` / `_INVALID` | Compare the imprint with the data's digest by hand (`openssl ts -verify -data`); the reasons listed | Which file it covers; that the stated time is false |
+| `PKCS12_UNREADABLE` | Supply the password (`RV_P12_PASSWORD`) and re-run | Damage |
+| `CRYPTO_INPUT_UNPARSABLE` / `ANALYSIS_STEP_FAILED` | The error; re-export the object; fix the anchor file | Tampering |
+| `EVIDENCE_CHANGED_DURING_READ` | Another program writing to the evidence; storage; re-run on a stable copy | Who changed it |
 <!-- /forge:domain -->
 
 | Code (case folder, analysis tools) | Check next | Do not conclude |
@@ -200,26 +188,53 @@ conclude" is the overreach to avoid in a report. The exact wording printed in re
 | `EVIDENCE_HASH_MISMATCH_WITH_CASE` (high) | Expected and actual digest in the finding; re-hash the file and the intake copy by hand; check storage, transfers and who had access since intake (case log) | Who changed it, when, or that it was deliberate |
 | `EVIDENCE_NOT_IN_CASE_REGISTRY` (medium) | Whether the file should have gone through intake; register it (intake run) if it is new evidence | That the file is altered or irrelevant |
 
-## 5. Working without a case folder
+## 5. Working without a case folder, and the creation commands
 
-The same command works standalone for a quick inventory (no registry, no case log):
+The same command works standalone (no registry, no case log):
 
 ```powershell
-rv-certcheck analyze -i D:\evidence -r --hash sha256,md5 --lang all --case CASE-2026-014 --out D:\work\inventory
-rv-certcheck analyze --input-list files.txt --progress jsonl > events.jsonl      # one JSON event per line on stdout
+rv-certcheck analyze -i D:\evidence -r --anchor D:\roots\ca.pem --at 2025-03-14 --out D:\work\certs
+rv-certcheck analyze --input-list files.txt --anchor rakvor --progress jsonl > events.jsonl
 ```
 
-`--progress jsonl` prints every event (`run_started`, `item_started`, `item_hashed`, `progress` with elapsed time
-and ETA, `item_finished`, `evidence_linked`, `error`, `cancelled`, `timestamp`, `report_written`, `run_finished`)
-for scripts; a closed stdout never aborts the run. **Ctrl+C** stops after the current 1 MiB chunk: partial reports are written,
-`run_cancelled` is logged, exit code 130.
+`--progress jsonl` prints every event for scripts. **Ctrl+C** stops after the current chunk: partial reports are
+written, `run_cancelled` is logged, exit code 130.
+
+**Creation commands** each write a standalone audited run under `--out` (default `rakvor-out`) and a
+`report.json` / `report.txt`; secrets come from environment variables (`--pass-env`, `--pin-env`,
+`--ca-pass-env`, `--p12-pass-env`) or a prompt without echo:
+
+| Task | Command | Guide |
+| --- | --- | --- |
+| Rakvor root, intermediate, code signing, examiner `.p12`, TLS, test TSA | `pki init-root`, `pki issue --profile …`, `pki import` | [company-pki.md](company-pki.md) |
+| Revoke, CRL, lab OCSP response | `pki revoke`, `pki crl`, `pki ocsp-sign` | [company-pki.md §8](company-pki.md#8-renewal-and-revocation) |
+| State and integrity of a CA folder | `pki show`, `pki verify` | [forensic-audit.md](forensic-audit.md#creation-runs-and-the-ca-folders-issuedjsonl) |
+| CSR for a public or qualified CA | `csr new`, `csr show` | [company-pki.md §7](company-pki.md#7-csrs-for-a-public-or-qualified-ca) |
+| Training and test material | `lab make --set full --seed N --lab-out DIR` | [theory.md B16](theory.md#b16-lab-sets-and-determinism) |
+| Does this key belong to this certificate? | `keys match KEY CERT` | [theory.md B12](theory.md#b12-private-key-matching) |
+| Tokens on this machine | `tokens list --pkcs11-module LIB` | [installation.md 5d](installation.md#5d-pkcs11-modules-hardware-tokens) |
+| Trust-list snapshots | `trust-list import --list eu|co FILE`, `list`, `show` | [theory.md B14](theory.md#b14-trust-list-formats-and-snapshots) |
+
+Checking a lab set against the tool (what CI's lab oracle does), for training:
+
+```powershell
+rv-certcheck lab make --set full --seed 1 --lab-out D:\lab\full-1
+# each case of D:\lab\full-1\expected_findings.json lists its files, anchors, at, purpose, CRLs/OCSP,
+# the codes analyze must and must not report, and the openssl verify code
+rv-certcheck analyze -i D:\lab\full-1\revoked-by-crl\leaf.crt -i D:\lab\full-1\ca\intermediate.crt `
+  --anchor D:\lab\full-1\ca\root.crt --crl D:\lab\full-1\ca\intermediate.crl --at 2026-01-01T00:00:00Z
+# expected: CERT_REVOKED (plus CERT_ISSUED_BY_RAKVOR_INTERNAL: lab certificates carry the Rakvor lab policy)
+```
+
+`trust-list` commands do not write an audit run in this version; the snapshot itself records its source, import
+time and SHA-256, and the anchors resolved from it are logged by every `analyze` run that uses them.
 
 ## 6. Timestamps
 
 By default each run asks the TSA (`http://timestamp.digicert.com`, change with `--tsa-url`) to sign the audit
 chain head just before the statistics report is written. The token covers every evidence digest, finding and
 item-report digest recorded before it, not the statistics report and `run_finished` written after it
-([theory.md B8](theory.md#b8-rfc-3161-trusted-timestamp)).
+([forensic-audit.md](forensic-audit.md#trusted-timestamp-rfc-3161)).
 
 | Situation | What happens | What to do |
 | --- | --- | --- |
@@ -243,7 +258,9 @@ openssl ts -verify -digest "$H" -in timestamp-$N.tsr -CAfile <TSA root.pem> -unt
 ```
 
 Get the TSA root certificate from the TSA's own repository, not from the token. Record the output in the case file:
-it is the evidence that the time is genuine.
+it is the evidence that the TSA signed that head at that time. The same TSA chain can be checked with this tool:
+`rv-certcheck analyze -i timestamp-$N.tsr --anchor <TSA root.pem>` reports `TIMESTAMP_TOKEN_VALID` and the TSA chain
+at genTime.
 
 ## 7. Signing reports with the examiner certificate
 
@@ -286,11 +303,11 @@ The last line says what vouches for the length of the log. A standalone run with
 a timestamp prints `truncation not detectable without a timestamp or case record`. A log shorter than its
 timestamp or case record is `BROKEN` (`truncated: …`, exit 3).
 
-| Step | Command | Proves |
+| Step | Command | Shows |
 | --- | --- | --- |
 | 1 | `rv-certcheck verify-log <log>` (exit 0 intact, 3 broken or truncated) | No entry edited, deleted or reordered; timestamp token matches the head it covers; the log still reaches the entry its timestamp covers and, in a case folder, the final entry recorded in the case log (the `truncation:` line names the anchor) |
 | 2 | `python tests/verify_chain.py <log>` (source tree) | Same, with an independent implementation; also re-hashes the evidence listed in `hashes.csv` |
-| 3 | OpenSSL ([Timestamps](#6-timestamps)) | The TSA really signed that head at that time |
+| 3 | OpenSSL ([Timestamps](#6-timestamps)) | The TSA signed that head at that time |
 | 4 | Script below | Every report file, `environment.json` and `hashes.csv` still has the digest recorded in the log |
 | 5 | `rv-certcheck verify-case <CASE> --rehash` | The run is the one the case log announced, complete up to its recorded final entry; the reachable evidence still matches the registry |
 | 6 | `python tests/validate_reports.py <CASE or report folder>` | Every JSON report, `case.json` and `registry.json` match their schemas |
@@ -324,7 +341,7 @@ print(f"{checked} files checked, {bad} mismatches"); sys.exit(3 if bad else 0)
 EOF
 ```
 
-On the sample run (3 items, one language) this checks 38 files; appending one byte to `statistics.json` gives
+On a run of the sample (13 items, one language) every item report and `statistics.*` are checked; appending one byte to `statistics.json` gives
 `MISMATCH … statistics.json` and exit code 3. A single file in PowerShell: `(Get-FileHash <file> -Algorithm
 SHA256).Hash.ToLower()` and search the value in `audit.jsonl`.
 
@@ -339,15 +356,27 @@ SHA256).Hash.ToLower()` and search the value in `audit.jsonl`.
 | `verify-case` | case intact (warnings printed) | not a case folder (no `case.json`) | — | at least one check failed (with `--rehash`: an evidence file differs from the registry) | — |
 | `timestamp` | obtained and logged | TSA unreachable (nothing changed) | — | log missing, broken or unreadable (nothing added) | — |
 | `self-test` | all pass | a failure: do not use the build | — | — | — |
+| `pki`, `csr`, `lab`, `keys`, `tokens` | done | runtime error (file not readable, wrong password or PIN, token or crypto failure) | usage error (bad value, empty subject, unknown profile or reason) | refused by a safety rule or verification failed (token root without `--confirm-root`, `client-internal`, a file that would be overwritten, a key that does not match, a CA folder that does not verify, `keys match` mismatch); nothing issued | — |
 
 ### Messages
 
 <!-- forge:domain -->
 | Message | Fix |
 | --- | --- |
+| `invalid --at '…': use now, signing-time, YYYY-MM-DD or an RFC 3339 time` | e.g. `--at 2025-03-14` or `--at 2025-03-14T09:30:00-05:00` |
+| `unknown purpose '…'` | One of any, tls-server, tls-client, code-signing, document-signing, email, timestamping |
+| `cannot read anchor …` / `anchor …: no certificate found (PEM, DER or PKCS#7 expected)` | Check the path and format of the `--anchor` file |
+| `system store not available on this platform in v0.1 (the Windows ROOT store is not read)` | Export the root and use `--anchor FILE` |
+| `no eu trust-list snapshot in … (import one with trust-list import)` | Run `trust-list import --list eu FILE` first, or set `RV_CERTCHECK_DATA` |
+| `trust-list snapshot … was altered: SHA-256 …, recorded …` | The stored snapshot was edited: re-import from the source file |
+| `--at signing-time: the item has no signing time, so the chain was judged now` (verdict note) | Give the date explicitly with `--at` (v0.1) |
+| `OpenSSL walk stopped after error … : later checks of the path could not be run` (verdict note) | Fix or explain the first error; the other checks of that path were not run |
+| `creating a root CA key on a token needs --confirm-root` | Follow the key ceremony, then add `--confirm-root` |
+| `the client-internal profile is disabled in v0.1` | Expected: client certificates wait for the CP/CPS |
+| `CA folder … does not verify, nothing will be issued: …` | Run `pki verify`; investigate; do not edit `issued.jsonl` by hand |
+| `… already exists: key files are never overwritten` | Choose another `--key-file` |
+| `the CA key does not match certs/ca.crt: refusing to sign` | Wrong key file or token key for this CA folder |
 | `at most 2 hash algorithms can run at the same time (got 3)` | Pick one or two algorithms |
-| `unknown hash algorithm '…': use md5, sha1, sha256, sha512, sha3-256 or blake3` | Spelling: `sha3-256` (also `sha3`, `sha3_256`) |
-| `… is neither a file nor a folder (symbolic links are not followed)` | Point at the link's target, or copy it |
 <!-- /forge:domain -->
 
 | Message | Fix |
