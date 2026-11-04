@@ -96,7 +96,8 @@ can also download the attestation bundle and trusted root for offline checks; se
 
 The release workflow signs `rv-certcheck.exe`, `rv-certcheck-gui.exe` and the installer **only when a code-signing
 certificate is configured** for the repository (`SIGN_PFX_BASE64` secret; signtool with SHA-256 and an RFC 3161
-timestamp). Check:
+timestamp). How Rakvor creates that certificate and its root, including the key ceremony, is in
+[company-pki.md](company-pki.md). Check:
 
 ```powershell
 Get-AuthenticodeSignature .\rv-certcheck-0.1.0-windows-x64-setup.exe |

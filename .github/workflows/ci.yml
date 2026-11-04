@@ -70,7 +70,9 @@ jobs:
           # Failures are also surfaced as annotations (readable through the API without downloading logs).
           # A hard limit: a hung test must fail the job (and say which test) instead of holding the runner for hours.
           if ! timeout 40m cargo test --workspace --locked 2>&1 | tee test.log; then
-            grep -E "panicked at|^---- |FAILED|^failures:|assertion|Error:|error:|running for over|^     Running" test.log | tail -40 | while IFS= read -r l; do echo "::error title=cargo test::${l}"; done
+            grep -E "panicked at|^---- |FAILED|^failures:|assertion|Error:|error:|error\[|running for over|^     Running" test.log | tail -40 | while IFS= read -r l; do echo "::error title=cargo test::${l}"; done
+            # Whatever the failure looks like, the last lines are readable without downloading the job log.
+            tail -n 25 test.log | while IFS= read -r l; do echo "::error title=cargo test (tail)::${l}"; done
             exit 1
           fi
       - name: Self-test of the hash implementations

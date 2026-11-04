@@ -33,7 +33,6 @@ quick-xml.workspace = true
 ureq.workspace = true
 p12-keystore.workspace = true
 # Creation (agent B)
-rcgen.workspace = true
 time.workspace = true
 x509-ocsp.workspace = true
 cryptoki.workspace = true

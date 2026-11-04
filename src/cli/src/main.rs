@@ -133,8 +133,8 @@ enum Command {
     /// Analyze certificates, chains, CRLs, OCSP responses, timestamp tokens, keys and CSRs.
     #[command(long_about = LONG_ABOUT, after_long_help = ANALYZE_AFTER_HELP)]
     Analyze(Box<AnalyzeArgs>),
-    /// Rakvor internal PKI: init-root, import, issue, revoke, crl, ocsp-sign.
-    #[command(subcommand)]
+    /// Rakvor internal PKI: init-root, import, issue, revoke, crl, ocsp-sign, show, verify.
+    #[command(subcommand, after_long_help = commands::PKI_AFTER_HELP)]
     Pki(commands::PkiCommand),
     /// Certificate signing requests: new, show.
     #[command(subcommand)]

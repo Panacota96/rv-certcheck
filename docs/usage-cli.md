@@ -54,7 +54,7 @@ Usage: rv-certcheck <COMMAND>
 
 Commands:
   analyze      Analyze certificates, chains, CRLs, OCSP responses, timestamp tokens, keys and CSRs
-  pki          Rakvor internal PKI: init-root, import, issue, revoke, crl, ocsp-sign
+  pki          Rakvor internal PKI: init-root, import, issue, revoke, crl, ocsp-sign, show, verify
   csr          Certificate signing requests: new, show
   lab          Reproducible lab and test certificate sets
   keys         Private keys: match a key with a certificate
@@ -350,7 +350,7 @@ FORENSIC NOTES:
 ## rv-certcheck pki
 
 ```text
-Rakvor internal PKI: init-root, import, issue, revoke, crl, ocsp-sign
+Rakvor internal PKI: init-root, import, issue, revoke, crl, ocsp-sign, show, verify
 
 Usage: rv-certcheck pki <COMMAND>
 
@@ -364,11 +364,53 @@ Commands:
   revoke     Revoke an issued certificate (takes effect in the next CRL / OCSP response)
   crl        Sign a CRL with every revoked serial
   ocsp-sign  Sign an OCSP response for a serial at a given time (lab use; there is no OCSP server)
+  show       Show a CA folder: ca.json and every certificate issued, with its revocation state
+  verify     Verify a CA folder: the issued.jsonl hash chain, certs/ca.crt and the SHA-256 of every
+             recorded file
   help       Print this message or the help of the given subcommand(s)
 
 Options:
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
+
+DESCRIPTION:
+  Rakvor's internal PKI. A CA folder (schema rakvor.ca/1) holds ca.json, the hash-chained
+  issued.jsonl,
+  certs/ (ca.crt and <serial>.crt), crl/ (<n>.crl, latest.crl), ocsp/ and keys/ (encrypted CA key,
+  owner-only; a token key is only referenced). Every certificate carries a random 128-bit serial,
+  AKI/SKI, the CRL URL of ca.json (crl_url) when set, and the Rakvor internal policy
+  2.25.130074246409705057913773883974790544206.1.1 with its user notice.
+
+  INTERNAL USE ONLY: these certificates are not a firma digital under Ley 527 de 1999 art. 28
+  (Colombia) and not qualified certificates under eIDAS (EU 910/2014). Client certificates
+  (profile client-internal) wait for Rakvor's CP/CPS reviewed by the lawyer (rv-certcheck#2).
+
+EXAMPLES:
+  Offline root on a YubiKey (key ceremony: docs/company-pki.md), then an intermediate in a file:
+    rv-certcheck pki init-root --ca E:\pki\root --ca-id rakvor-root-2026 --subject
+    "C=CO,O=Rakvor,CN=Rakvor Root CA 2026" \
+      --key-type p-384 --pkcs11-module "C:\Program Files\Yubico\Yubico PIV Tool\bin\libykcs11.dll" \
+      --token-serial 0012345678 --pin-env YUBIKEY_PIN --confirm-root
+    rv-certcheck pki issue --ca E:\pki\root --ca-pass-env YUBIKEY_PIN --profile intermediate \
+      --subject "C=CO,O=Rakvor,CN=Rakvor Issuing CA 2026" --key-type p-384 --key-file
+      E:\pki\issuing.key.p8
+  Examiner certificate for signing reports (rv-hashinv --sign-cert):
+    rv-certcheck pki issue --ca E:\pki\issuing --profile examiner --subject "C=CO,O=Rakvor,CN=Ana
+    Ruiz" \
+      --san email:ana.ruiz@rakvor.co --key-type rsa-3072
+  Revoke, then publish a CRL:
+    rv-certcheck pki revoke --ca E:\pki\issuing --serial 5f3a09c1... --reason keyCompromise
+    rv-certcheck pki crl --ca E:\pki\issuing
+  Check a CA folder:
+    rv-certcheck pki verify --ca E:\pki\issuing
+
+SECURITY NOTES:
+  - Encrypted keys: PKCS#8 PBES2, PBKDF2-HMAC-SHA256 600 000 iterations, AES-256-CBC; files 0600 on
+  Unix,
+    inside the user profile on Windows; never overwritten.
+  - A root key on a token needs --confirm-root. Keep the root offline; issue from an intermediate.
+  - issued.jsonl is verified before every operation: an edited, deleted or re-ordered record, or a
+    modified certificate or CRL file, stops the CA (exit 3).
 ```
 
 ### rv-certcheck pki init-root
@@ -381,22 +423,24 @@ Usage: rv-certcheck pki init-root [OPTIONS] --ca <DIR> --ca-id <ID>
 Options:
       --ca <DIR>
           CA folder to create (must be empty or missing).
+          Default: none (required)
           Example: --ca E:\rakvor-pki\root-2026
 
       --ca-id <ID>
-          Short id of the CA, used in file names and audit entries.
+          Short id of the CA, used in file names and audit entries (letters, digits, - _ .).
+          Default: none (required)
           Example: --ca-id rakvor-root-2026
 
       --subject <DN>
           Subject as comma-separated attributes in order (C, ST, L, O, OU, CN, emailAddress,
-          serialNumber).
-          Default: none (required, except when issuing from a CSR)
+          serialNumber, ...).
+          Default: none (required, except when issuing from a CSR, whose subject is then used)
           Example: --subject "C=CO,O=Rakvor,CN=Ana Ruiz"
 
       --san <TYPE:VALUE>
           Subject alternative name, repeatable: dns:NAME, ip:ADDRESS, email:ADDRESS, uri:URI.
-          Default: none
-          Example: --san dns:lab.rakvor.local --san email:ana.ruiz@rakvor.co
+          Default: none (tls-server needs at least one dns: or ip:)
+          Example: --san dns:hub.rakvor.local --san email:ana.ruiz@rakvor.co
 
       --key-type <TYPE>
           Key type: rsa-2048, rsa-3072, rsa-4096, p-256, p-384, ed25519.
@@ -405,11 +449,14 @@ Options:
 
       --key-file <FILE>
           Encrypted key file (PKCS#8, created owner-only, never overwritten).
-          Default: keys/<name>.key.p8 inside the CA folder
-          Example: --key-file keys/examiner.key.p8
+          Default: see the command (init-root: <CA>/keys/<CA-ID>.key.p8; issue:
+          <CA>/subjects/<PROFILE>-<TIME>.key.p8;
+          csr new: <OUT-FILE>.key.p8)
+          Example: --key-file E:\pki\ana-ruiz.key.p8
 
       --pass-env <VAR>
-          Environment variable holding the key-file password (never logged; prompted when unset).
+          Environment variable holding the key-file password (never logged; prompted without echo
+          when unset).
           Default: RV_KEY_PASSWORD
           Example: --pass-env ROOT_KEY_PASS
 
@@ -424,17 +471,18 @@ Options:
           Example: --token-serial 0012345678
 
       --key-label <LABEL>
-          Label of the key on the token (new keys) or CKA_ID in hex (existing keys: --key-id).
-          Default: the CA id or certificate name
+          Label of a new key on the token.
+          Default: the CA id, the profile or "csr-key"
           Example: --key-label rakvor-root-2026
 
       --key-id <HEX>
-          CKA_ID (hex) of an existing key on the token.
+          CKA_ID (hex) of an existing key on the token (pki import).
           Default: none
-          Example: --key-id 01
+          Example: --key-id 3f9a0c...
 
       --pin-env <VAR>
-          Environment variable holding the token PIN (never logged; prompted when unset).
+          Environment variable holding the token PIN (never logged; prompted without echo when
+          unset).
           Default: RV_TOKEN_PIN
           Example: --pin-env YUBIKEY_PIN
 
@@ -445,13 +493,46 @@ Options:
 
       --confirm-root
           Required to create a root key on a token (a lost or exposed root key puts every Rakvor
-          signature in doubt: follow the key ceremony in docs/installation.md)
+          signature in doubt: follow the key ceremony in docs/company-pki.md).
+          Default: off (a token root is refused)
+          Example: --confirm-root
+
+      --out <DIR>
+          Folder for the run's audit log and report: <OUT>/logs/<RUN-ID>/ and
+          <OUT>/reports/<RUN-ID>/.
+          Default: rakvor-out
+          Example: --out D:\pki-runs
+
+      --json
+          Print the result as JSON on stdout instead of a summary.
+          Default: off (human-readable summary)
+          Example: --json
 
       --actor <NAME>
-          Name written in the issued-certificate log. Default: the operating-system user name
+          Name written in the audit log and in issued.jsonl.
+          Default: the operating-system user name
+          Example: --actor "Ana Ruiz"
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
+
+EXIT CODES:
+  0  Done.
+  1  Runtime error (file not readable, wrong password or PIN, token or crypto failure). Audited.
+  2  Usage error (bad option value, empty subject, unknown profile or reason).
+  3  Refused by a safety rule, or verification failed: root key on a token without --confirm-root,
+     client-internal profile (needs the CP/CPS, rv-certcheck#2), a file that would be overwritten, a
+     key that does not match its certificate, a CA folder whose issued.jsonl or files do not verify,
+     a key that does not match (keys match). Nothing is issued. Audited.
+
+FILES WRITTEN (every command):
+  <OUT>/logs/<RUN-ID>/audit.jsonl        Hash-chained log of the run (rv-certcheck verify-log checks
+  it).
+  <OUT>/logs/<RUN-ID>/audit.log          The same, human-readable.
+  <OUT>/logs/<RUN-ID>/environment.json   Tool version, OS, host, user, command line.
+  <OUT>/reports/<RUN-ID>/report.json|.txt  What was created or checked, with the SHA-256 of every
+  file.
+  <CA>/ca.json, <CA>/issued.jsonl, <CA>/certs/ca.crt, <CA>/keys/<CA-ID>.key.p8 (file key)
 ```
 
 ### rv-certcheck pki import
@@ -463,22 +544,30 @@ Usage: rv-certcheck pki import [OPTIONS] --ca <DIR> --ca-id <ID> --cert <FILE>
 
 Options:
       --ca <DIR>
-          CA folder to create
+          CA folder to create (must be empty or missing).
+          Default: none (required)
+          Example: --ca E:\rakvor-pki\code-signing-root
 
       --ca-id <ID>
-          Short id of the CA. Example: --ca-id rakvor-code-signing-root
+          Short id of the CA.
+          Default: none (required)
+          Example: --ca-id rakvor-code-signing-root
 
       --cert <FILE>
-          The CA certificate (PEM or DER). Example: --cert
-          packaging/signing/rakvor-code-signing-root.cer
+          The CA certificate (PEM or DER).
+          Default: none (required)
+          Example: --cert packaging/signing/rakvor-code-signing-root.cer
 
       --key-file <FILE>
           Encrypted key file (PKCS#8, created owner-only, never overwritten).
-          Default: keys/<name>.key.p8 inside the CA folder
-          Example: --key-file keys/examiner.key.p8
+          Default: see the command (init-root: <CA>/keys/<CA-ID>.key.p8; issue:
+          <CA>/subjects/<PROFILE>-<TIME>.key.p8;
+          csr new: <OUT-FILE>.key.p8)
+          Example: --key-file E:\pki\ana-ruiz.key.p8
 
       --pass-env <VAR>
-          Environment variable holding the key-file password (never logged; prompted when unset).
+          Environment variable holding the key-file password (never logged; prompted without echo
+          when unset).
           Default: RV_KEY_PASSWORD
           Example: --pass-env ROOT_KEY_PASS
 
@@ -493,25 +582,57 @@ Options:
           Example: --token-serial 0012345678
 
       --key-label <LABEL>
-          Label of the key on the token (new keys) or CKA_ID in hex (existing keys: --key-id).
-          Default: the CA id or certificate name
+          Label of a new key on the token.
+          Default: the CA id, the profile or "csr-key"
           Example: --key-label rakvor-root-2026
 
       --key-id <HEX>
-          CKA_ID (hex) of an existing key on the token.
+          CKA_ID (hex) of an existing key on the token (pki import).
           Default: none
-          Example: --key-id 01
+          Example: --key-id 3f9a0c...
 
       --pin-env <VAR>
-          Environment variable holding the token PIN (never logged; prompted when unset).
+          Environment variable holding the token PIN (never logged; prompted without echo when
+          unset).
           Default: RV_TOKEN_PIN
           Example: --pin-env YUBIKEY_PIN
 
+      --out <DIR>
+          Folder for the run's audit log and report: <OUT>/logs/<RUN-ID>/ and
+          <OUT>/reports/<RUN-ID>/.
+          Default: rakvor-out
+          Example: --out D:\pki-runs
+
+      --json
+          Print the result as JSON on stdout instead of a summary.
+          Default: off (human-readable summary)
+          Example: --json
+
       --actor <NAME>
-          Name written in the issued-certificate log. Default: the operating-system user name
+          Name written in the audit log and in issued.jsonl.
+          Default: the operating-system user name
+          Example: --actor "Ana Ruiz"
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
+
+EXIT CODES:
+  0  Done.
+  1  Runtime error (file not readable, wrong password or PIN, token or crypto failure). Audited.
+  2  Usage error (bad option value, empty subject, unknown profile or reason).
+  3  Refused by a safety rule, or verification failed: root key on a token without --confirm-root,
+     client-internal profile (needs the CP/CPS, rv-certcheck#2), a file that would be overwritten, a
+     key that does not match its certificate, a CA folder whose issued.jsonl or files do not verify,
+     a key that does not match (keys match). Nothing is issued. Audited.
+
+FILES WRITTEN (every command):
+  <OUT>/logs/<RUN-ID>/audit.jsonl        Hash-chained log of the run (rv-certcheck verify-log checks
+  it).
+  <OUT>/logs/<RUN-ID>/audit.log          The same, human-readable.
+  <OUT>/logs/<RUN-ID>/environment.json   Tool version, OS, host, user, command line.
+  <OUT>/reports/<RUN-ID>/report.json|.txt  What was created or checked, with the SHA-256 of every
+  file.
+  <CA>/ca.json, <CA>/issued.jsonl, <CA>/certs/ca.crt (the key stays where it is)
 ```
 
 ### rv-certcheck pki issue
@@ -524,35 +645,47 @@ Usage: rv-certcheck pki issue [OPTIONS] --ca <DIR> --profile <PROFILE>
 
 Options:
       --ca <DIR>
-          CA folder that signs
+          CA folder that signs.
+          Default: none (required)
+          Example: --ca E:\rakvor-pki\issuing-2026
 
       --profile <PROFILE>
-          Profile. Example: --profile examiner
+          Profile: intermediate, code-signing, examiner, tsa, tls-server.
+          Default: none (required)
+          Example: --profile examiner
 
       --subject <DN>
           Subject as comma-separated attributes in order (C, ST, L, O, OU, CN, emailAddress,
-          serialNumber).
-          Default: none (required, except when issuing from a CSR)
+          serialNumber, ...).
+          Default: none (required, except when issuing from a CSR, whose subject is then used)
           Example: --subject "C=CO,O=Rakvor,CN=Ana Ruiz"
 
       --san <TYPE:VALUE>
           Subject alternative name, repeatable: dns:NAME, ip:ADDRESS, email:ADDRESS, uri:URI.
-          Default: none
-          Example: --san dns:lab.rakvor.local --san email:ana.ruiz@rakvor.co
+          Default: none (tls-server needs at least one dns: or ip:)
+          Example: --san dns:hub.rakvor.local --san email:ana.ruiz@rakvor.co
 
       --csr <FILE>
-          Issue for this CSR (its key and subject) instead of generating a key
+          Certify the key of this CSR (PEM or DER; its self-signature must verify) instead of making
+          a key.
+          Default: none (a new key is generated)
+          Example: --csr requests/hub.csr
 
       --key-type <TYPE>
-          Key type of the new key (ignored with --csr). Default: rsa-3072
+          Key type of the new key (ignored with --csr).
+          Default: rsa-3072
+          Example: --key-type p-256
 
       --key-file <FILE>
           Encrypted key file (PKCS#8, created owner-only, never overwritten).
-          Default: keys/<name>.key.p8 inside the CA folder
-          Example: --key-file keys/examiner.key.p8
+          Default: see the command (init-root: <CA>/keys/<CA-ID>.key.p8; issue:
+          <CA>/subjects/<PROFILE>-<TIME>.key.p8;
+          csr new: <OUT-FILE>.key.p8)
+          Example: --key-file E:\pki\ana-ruiz.key.p8
 
       --pass-env <VAR>
-          Environment variable holding the key-file password (never logged; prompted when unset).
+          Environment variable holding the key-file password (never logged; prompted without echo
+          when unset).
           Default: RV_KEY_PASSWORD
           Example: --pass-env ROOT_KEY_PASS
 
@@ -567,35 +700,85 @@ Options:
           Example: --token-serial 0012345678
 
       --key-label <LABEL>
-          Label of the key on the token (new keys) or CKA_ID in hex (existing keys: --key-id).
-          Default: the CA id or certificate name
+          Label of a new key on the token.
+          Default: the CA id, the profile or "csr-key"
           Example: --key-label rakvor-root-2026
 
       --key-id <HEX>
-          CKA_ID (hex) of an existing key on the token.
+          CKA_ID (hex) of an existing key on the token (pki import).
           Default: none
-          Example: --key-id 01
+          Example: --key-id 3f9a0c...
 
       --pin-env <VAR>
-          Environment variable holding the token PIN (never logged; prompted when unset).
+          Environment variable holding the token PIN (never logged; prompted without echo when
+          unset).
           Default: RV_TOKEN_PIN
           Example: --pin-env YUBIKEY_PIN
 
       --ca-pass-env <VAR>
-          Environment variable with the CA key password or PIN. Default: RV_CA_PASSWORD
+          Environment variable with the CA key password (file key) or the CA token PIN.
+          Default: RV_CA_PASSWORD
+          Example: --ca-pass-env ROOT_KEY_PASS
 
       --p12-pass-env <VAR>
-          Examiner profile: environment variable with the password of the .p12 written. Default:
-          RV_P12_PASSWORD
+          Examiner profile: environment variable with the password of the .p12 written.
+          Default: RV_P12_PASSWORD
+          Example: --p12-pass-env ANA_P12_PASS
 
       --validity-days <DAYS>
-          Validity in days. Default: 825
+          Validity in days (capped at the CA certificate's notAfter).
+          Default: 825
+          Example: --validity-days 365
+
+      --out <DIR>
+          Folder for the run's audit log and report: <OUT>/logs/<RUN-ID>/ and
+          <OUT>/reports/<RUN-ID>/.
+          Default: rakvor-out
+          Example: --out D:\pki-runs
+
+      --json
+          Print the result as JSON on stdout instead of a summary.
+          Default: off (human-readable summary)
+          Example: --json
 
       --actor <NAME>
-          Name written in the issued-certificate log. Default: the operating-system user name
+          Name written in the audit log and in issued.jsonl.
+          Default: the operating-system user name
+          Example: --actor "Ana Ruiz"
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
+
+PROFILES:
+  intermediate  CA:TRUE pathlen 0, keyCertSign + cRLSign (manage it with `pki import` as its own CA
+  folder).
+  code-signing  digitalSignature, EKU codeSigning (Rakvor release signing).
+  examiner      digitalSignature + nonRepudiation, EKU emailProtection + documentSigning (RFC 9336
+  and
+                Microsoft); also writes <serial>.p12 next to the key for rv-hashinv --sign-cert (RSA
+                keys).
+  tsa           digitalSignature, EKU timeStamping (critical).
+  tls-server    digitalSignature (+keyEncipherment for RSA), EKU serverAuth, at least one dns:/ip:
+  SAN.
+
+EXIT CODES:
+  0  Done.
+  1  Runtime error (file not readable, wrong password or PIN, token or crypto failure). Audited.
+  2  Usage error (bad option value, empty subject, unknown profile or reason).
+  3  Refused by a safety rule, or verification failed: root key on a token without --confirm-root,
+     client-internal profile (needs the CP/CPS, rv-certcheck#2), a file that would be overwritten, a
+     key that does not match its certificate, a CA folder whose issued.jsonl or files do not verify,
+     a key that does not match (keys match). Nothing is issued. Audited.
+
+FILES WRITTEN (every command):
+  <OUT>/logs/<RUN-ID>/audit.jsonl        Hash-chained log of the run (rv-certcheck verify-log checks
+  it).
+  <OUT>/logs/<RUN-ID>/audit.log          The same, human-readable.
+  <OUT>/logs/<RUN-ID>/environment.json   Tool version, OS, host, user, command line.
+  <OUT>/reports/<RUN-ID>/report.json|.txt  What was created or checked, with the SHA-256 of every
+  file.
+  <CA>/certs/<SERIAL>.crt, the new key (encrypted), <SERIAL>.p12 (examiner), a record in
+  <CA>/issued.jsonl
 ```
 
 ### rv-certcheck pki revoke
@@ -607,23 +790,62 @@ Usage: rv-certcheck pki revoke [OPTIONS] --ca <DIR> --serial <HEX>
 
 Options:
       --ca <DIR>
-          
+          CA folder that issued the certificate.
+          Default: none (required)
+          Example: --ca E:\rakvor-pki\issuing-2026
 
       --serial <HEX>
-          Serial number in hex. Example: --serial 5f3a...
+          Serial number in hex (as `pki show` prints it; case and colons ignored).
+          Default: none (required)
+          Example: --serial 5f3a09c1d2e4...
 
       --reason <REASON>
-          RFC 5280 reason (keyCompromise, superseded, cessationOfOperation, ...). Default:
-          unspecified
+          RFC 5280 reason: unspecified, keyCompromise, cACompromise, affiliationChanged, superseded,
+          cessationOfOperation, certificateHold, privilegeWithdrawn, aACompromise.
+          Default: unspecified
+          Example: --reason keyCompromise
 
       --at <TIME>
-          Revocation time (RFC 3339). Default: now
+          Revocation time (RFC 3339 or YYYY-MM-DD).
+          Default: now
+          Example: --at 2026-11-02T09:00:00Z
+
+      --out <DIR>
+          Folder for the run's audit log and report: <OUT>/logs/<RUN-ID>/ and
+          <OUT>/reports/<RUN-ID>/.
+          Default: rakvor-out
+          Example: --out D:\pki-runs
+
+      --json
+          Print the result as JSON on stdout instead of a summary.
+          Default: off (human-readable summary)
+          Example: --json
 
       --actor <NAME>
-          
+          Name written in the audit log and in issued.jsonl.
+          Default: the operating-system user name
+          Example: --actor "Ana Ruiz"
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
+
+EXIT CODES:
+  0  Done.
+  1  Runtime error (file not readable, wrong password or PIN, token or crypto failure). Audited.
+  2  Usage error (bad option value, empty subject, unknown profile or reason).
+  3  Refused by a safety rule, or verification failed: root key on a token without --confirm-root,
+     client-internal profile (needs the CP/CPS, rv-certcheck#2), a file that would be overwritten, a
+     key that does not match its certificate, a CA folder whose issued.jsonl or files do not verify,
+     a key that does not match (keys match). Nothing is issued. Audited.
+
+FILES WRITTEN (every command):
+  <OUT>/logs/<RUN-ID>/audit.jsonl        Hash-chained log of the run (rv-certcheck verify-log checks
+  it).
+  <OUT>/logs/<RUN-ID>/audit.log          The same, human-readable.
+  <OUT>/logs/<RUN-ID>/environment.json   Tool version, OS, host, user, command line.
+  <OUT>/reports/<RUN-ID>/report.json|.txt  What was created or checked, with the SHA-256 of every
+  file.
+  a `revoked` record in <CA>/issued.jsonl
 ```
 
 ### rv-certcheck pki crl
@@ -635,22 +857,61 @@ Usage: rv-certcheck pki crl [OPTIONS] --ca <DIR>
 
 Options:
       --ca <DIR>
-          
+          CA folder.
+          Default: none (required)
+          Example: --ca E:\rakvor-pki\issuing-2026
 
       --ca-pass-env <VAR>
-          Environment variable with the CA key password or PIN. Default: RV_CA_PASSWORD
+          Environment variable with the CA key password or the CA token PIN.
+          Default: RV_CA_PASSWORD
+          Example: --ca-pass-env ISSUING_KEY_PASS
 
       --next-update-days <DAYS>
-          Days until nextUpdate. Default: 30
+          Days until nextUpdate.
+          Default: 30
+          Example: --next-update-days 7
 
       --this-update <TIME>
-          thisUpdate (RFC 3339). Default: now
+          thisUpdate (RFC 3339).
+          Default: now
+          Example: --this-update 2026-11-01T00:00:00Z
+
+      --out <DIR>
+          Folder for the run's audit log and report: <OUT>/logs/<RUN-ID>/ and
+          <OUT>/reports/<RUN-ID>/.
+          Default: rakvor-out
+          Example: --out D:\pki-runs
+
+      --json
+          Print the result as JSON on stdout instead of a summary.
+          Default: off (human-readable summary)
+          Example: --json
 
       --actor <NAME>
-          
+          Name written in the audit log and in issued.jsonl.
+          Default: the operating-system user name
+          Example: --actor "Ana Ruiz"
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
+
+EXIT CODES:
+  0  Done.
+  1  Runtime error (file not readable, wrong password or PIN, token or crypto failure). Audited.
+  2  Usage error (bad option value, empty subject, unknown profile or reason).
+  3  Refused by a safety rule, or verification failed: root key on a token without --confirm-root,
+     client-internal profile (needs the CP/CPS, rv-certcheck#2), a file that would be overwritten, a
+     key that does not match its certificate, a CA folder whose issued.jsonl or files do not verify,
+     a key that does not match (keys match). Nothing is issued. Audited.
+
+FILES WRITTEN (every command):
+  <OUT>/logs/<RUN-ID>/audit.jsonl        Hash-chained log of the run (rv-certcheck verify-log checks
+  it).
+  <OUT>/logs/<RUN-ID>/audit.log          The same, human-readable.
+  <OUT>/logs/<RUN-ID>/environment.json   Tool version, OS, host, user, command line.
+  <OUT>/reports/<RUN-ID>/report.json|.txt  What was created or checked, with the SHA-256 of every
+  file.
+  <CA>/crl/<NUMBER>.crl and <CA>/crl/latest.crl (DER), a record in <CA>/issued.jsonl
 ```
 
 ### rv-certcheck pki ocsp-sign
@@ -658,32 +919,175 @@ Options:
 ```text
 Sign an OCSP response for a serial at a given time (lab use; there is no OCSP server)
 
-Usage: rv-certcheck pki ocsp-sign [OPTIONS] --ca <DIR> --serial <HEX> --out <FILE>
+Usage: rv-certcheck pki ocsp-sign [OPTIONS] --ca <DIR> --serial <HEX> --ocsp-out <FILE>
 
 Options:
       --ca <DIR>
-          
+          CA folder.
+          Default: none (required)
+          Example: --ca E:\rakvor-pki\issuing-2026
 
       --serial <HEX>
-          
+          Serial number in hex.
+          Default: none (required)
+          Example: --serial 5f3a09c1d2e4...
 
-      --out <FILE>
-          Output file (DER). Example: --out leaf.ocsp
+      --ocsp-out <FILE>
+          Output file (DER), never overwritten.
+          Default: none (required)
+          Example: --out leaf.ocsp
 
       --produced-at <TIME>
-          producedAt / thisUpdate (RFC 3339). Default: now
+          producedAt / thisUpdate (RFC 3339).
+          Default: now
+          Example: --produced-at 2026-11-01T00:00:00Z
 
       --next-update-days <DAYS>
-          Days until nextUpdate. Default: none
+          Days until nextUpdate.
+          Default: none (no nextUpdate)
+          Example: --next-update-days 7
 
       --ca-pass-env <VAR>
-          
+          Environment variable with the CA key password or the CA token PIN.
+          Default: RV_CA_PASSWORD
+          Example: --ca-pass-env ISSUING_KEY_PASS
+
+      --out <DIR>
+          Folder for the run's audit log and report: <OUT>/logs/<RUN-ID>/ and
+          <OUT>/reports/<RUN-ID>/.
+          Default: rakvor-out
+          Example: --out D:\pki-runs
+
+      --json
+          Print the result as JSON on stdout instead of a summary.
+          Default: off (human-readable summary)
+          Example: --json
 
       --actor <NAME>
-          
+          Name written in the audit log and in issued.jsonl.
+          Default: the operating-system user name
+          Example: --actor "Ana Ruiz"
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
+
+EXIT CODES:
+  0  Done.
+  1  Runtime error (file not readable, wrong password or PIN, token or crypto failure). Audited.
+  2  Usage error (bad option value, empty subject, unknown profile or reason).
+  3  Refused by a safety rule, or verification failed: root key on a token without --confirm-root,
+     client-internal profile (needs the CP/CPS, rv-certcheck#2), a file that would be overwritten, a
+     key that does not match its certificate, a CA folder whose issued.jsonl or files do not verify,
+     a key that does not match (keys match). Nothing is issued. Audited.
+
+FILES WRITTEN (every command):
+  <OUT>/logs/<RUN-ID>/audit.jsonl        Hash-chained log of the run (rv-certcheck verify-log checks
+  it).
+  <OUT>/logs/<RUN-ID>/audit.log          The same, human-readable.
+  <OUT>/logs/<RUN-ID>/environment.json   Tool version, OS, host, user, command line.
+  <OUT>/reports/<RUN-ID>/report.json|.txt  What was created or checked, with the SHA-256 of every
+  file.
+  --out (DER) and a copy in <CA>/ocsp/, a record in <CA>/issued.jsonl
+```
+
+### rv-certcheck pki show
+
+```text
+Show a CA folder: ca.json and every certificate issued, with its revocation state
+
+Usage: rv-certcheck pki show [OPTIONS] --ca <DIR>
+
+Options:
+      --ca <DIR>
+          CA folder.
+          Default: none (required)
+          Example: --ca E:\rakvor-pki\issuing-2026
+
+      --out <DIR>
+          Folder for the run's audit log and report: <OUT>/logs/<RUN-ID>/ and
+          <OUT>/reports/<RUN-ID>/.
+          Default: rakvor-out
+          Example: --out D:\pki-runs
+
+      --json
+          Print the result as JSON on stdout instead of a summary.
+          Default: off (human-readable summary)
+          Example: --json
+
+      --actor <NAME>
+          Name written in the audit log and in issued.jsonl.
+          Default: the operating-system user name
+          Example: --actor "Ana Ruiz"
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+EXIT CODES:
+  0  Done.
+  1  Runtime error (file not readable, wrong password or PIN, token or crypto failure). Audited.
+  2  Usage error (bad option value, empty subject, unknown profile or reason).
+  3  Refused by a safety rule, or verification failed: root key on a token without --confirm-root,
+     client-internal profile (needs the CP/CPS, rv-certcheck#2), a file that would be overwritten, a
+     key that does not match its certificate, a CA folder whose issued.jsonl or files do not verify,
+     a key that does not match (keys match). Nothing is issued. Audited.
+
+FILES WRITTEN (every command):
+  <OUT>/logs/<RUN-ID>/audit.jsonl        Hash-chained log of the run (rv-certcheck verify-log checks
+  it).
+  <OUT>/logs/<RUN-ID>/audit.log          The same, human-readable.
+  <OUT>/logs/<RUN-ID>/environment.json   Tool version, OS, host, user, command line.
+  <OUT>/reports/<RUN-ID>/report.json|.txt  What was created or checked, with the SHA-256 of every
+  file.
+```
+
+### rv-certcheck pki verify
+
+```text
+Verify a CA folder: the issued.jsonl hash chain, certs/ca.crt and the SHA-256 of every recorded file
+
+Usage: rv-certcheck pki verify [OPTIONS] --ca <DIR>
+
+Options:
+      --ca <DIR>
+          CA folder.
+          Default: none (required)
+          Example: --ca E:\rakvor-pki\issuing-2026
+
+      --out <DIR>
+          Folder for the run's audit log and report: <OUT>/logs/<RUN-ID>/ and
+          <OUT>/reports/<RUN-ID>/.
+          Default: rakvor-out
+          Example: --out D:\pki-runs
+
+      --json
+          Print the result as JSON on stdout instead of a summary.
+          Default: off (human-readable summary)
+          Example: --json
+
+      --actor <NAME>
+          Name written in the audit log and in issued.jsonl.
+          Default: the operating-system user name
+          Example: --actor "Ana Ruiz"
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+EXIT CODES:
+  0  Done.
+  1  Runtime error (file not readable, wrong password or PIN, token or crypto failure). Audited.
+  2  Usage error (bad option value, empty subject, unknown profile or reason).
+  3  Refused by a safety rule, or verification failed: root key on a token without --confirm-root,
+     client-internal profile (needs the CP/CPS, rv-certcheck#2), a file that would be overwritten, a
+     key that does not match its certificate, a CA folder whose issued.jsonl or files do not verify,
+     a key that does not match (keys match). Nothing is issued. Audited.
+
+FILES WRITTEN (every command):
+  <OUT>/logs/<RUN-ID>/audit.jsonl        Hash-chained log of the run (rv-certcheck verify-log checks
+  it).
+  <OUT>/logs/<RUN-ID>/audit.log          The same, human-readable.
+  <OUT>/logs/<RUN-ID>/environment.json   Tool version, OS, host, user, command line.
+  <OUT>/reports/<RUN-ID>/report.json|.txt  What was created or checked, with the SHA-256 of every
+  file.
 ```
 
 ## rv-certcheck csr
@@ -708,30 +1112,35 @@ Options:
 ```text
 Create a key (token or encrypted file) and a CSR for a public or qualified CA
 
-Usage: rv-certcheck csr new [OPTIONS] --out <FILE>
+Usage: rv-certcheck csr new [OPTIONS] --csr-out <FILE>
 
 Options:
       --subject <DN>
           Subject as comma-separated attributes in order (C, ST, L, O, OU, CN, emailAddress,
-          serialNumber).
-          Default: none (required, except when issuing from a CSR)
+          serialNumber, ...).
+          Default: none (required, except when issuing from a CSR, whose subject is then used)
           Example: --subject "C=CO,O=Rakvor,CN=Ana Ruiz"
 
       --san <TYPE:VALUE>
           Subject alternative name, repeatable: dns:NAME, ip:ADDRESS, email:ADDRESS, uri:URI.
-          Default: none
-          Example: --san dns:lab.rakvor.local --san email:ana.ruiz@rakvor.co
+          Default: none (tls-server needs at least one dns: or ip:)
+          Example: --san dns:hub.rakvor.local --san email:ana.ruiz@rakvor.co
 
       --key-type <TYPE>
-          Key type. Default: rsa-3072
+          Key type: rsa-2048, rsa-3072, rsa-4096, p-256, p-384, ed25519.
+          Default: rsa-3072
+          Example: --key-type p-256
 
       --key-file <FILE>
           Encrypted key file (PKCS#8, created owner-only, never overwritten).
-          Default: keys/<name>.key.p8 inside the CA folder
-          Example: --key-file keys/examiner.key.p8
+          Default: see the command (init-root: <CA>/keys/<CA-ID>.key.p8; issue:
+          <CA>/subjects/<PROFILE>-<TIME>.key.p8;
+          csr new: <OUT-FILE>.key.p8)
+          Example: --key-file E:\pki\ana-ruiz.key.p8
 
       --pass-env <VAR>
-          Environment variable holding the key-file password (never logged; prompted when unset).
+          Environment variable holding the key-file password (never logged; prompted without echo
+          when unset).
           Default: RV_KEY_PASSWORD
           Example: --pass-env ROOT_KEY_PASS
 
@@ -746,25 +1155,69 @@ Options:
           Example: --token-serial 0012345678
 
       --key-label <LABEL>
-          Label of the key on the token (new keys) or CKA_ID in hex (existing keys: --key-id).
-          Default: the CA id or certificate name
+          Label of a new key on the token.
+          Default: the CA id, the profile or "csr-key"
           Example: --key-label rakvor-root-2026
 
       --key-id <HEX>
-          CKA_ID (hex) of an existing key on the token.
+          CKA_ID (hex) of an existing key on the token (pki import).
           Default: none
-          Example: --key-id 01
+          Example: --key-id 3f9a0c...
 
       --pin-env <VAR>
-          Environment variable holding the token PIN (never logged; prompted when unset).
+          Environment variable holding the token PIN (never logged; prompted without echo when
+          unset).
           Default: RV_TOKEN_PIN
           Example: --pin-env YUBIKEY_PIN
 
-      --out <FILE>
-          CSR file to write (PEM). Example: --out ana-ruiz.csr
+      --csr-out <FILE>
+          CSR file to write (PEM), never overwritten.
+          Default: none (required)
+          Example: --csr-out ana-ruiz.csr
+
+      --out <DIR>
+          Folder for the run's audit log and report: <OUT>/logs/<RUN-ID>/ and
+          <OUT>/reports/<RUN-ID>/.
+          Default: rakvor-out
+          Example: --out D:\pki-runs
+
+      --json
+          Print the result as JSON on stdout instead of a summary.
+          Default: off (human-readable summary)
+          Example: --json
+
+      --actor <NAME>
+          Name written in the audit log and in issued.jsonl.
+          Default: the operating-system user name
+          Example: --actor "Ana Ruiz"
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
+
+EXAMPLES:
+  rv-certcheck csr new --subject "C=CO,O=Rakvor SAS,CN=www.rakvor.co" --san dns:www.rakvor.co
+  --key-type p-256 --csr-out www.csr
+  Key on a YubiKey (qualified CAs often require it):
+    rv-certcheck csr new --subject "C=CO,CN=Ana Ruiz,serialNumber=CC79123456" --csr-out ana.csr \
+      --pkcs11-module libykcs11.so --token-serial 0012345678 --pin-env YUBIKEY_PIN
+
+EXIT CODES:
+  0  Done.
+  1  Runtime error (file not readable, wrong password or PIN, token or crypto failure). Audited.
+  2  Usage error (bad option value, empty subject, unknown profile or reason).
+  3  Refused by a safety rule, or verification failed: root key on a token without --confirm-root,
+     client-internal profile (needs the CP/CPS, rv-certcheck#2), a file that would be overwritten, a
+     key that does not match its certificate, a CA folder whose issued.jsonl or files do not verify,
+     a key that does not match (keys match). Nothing is issued. Audited.
+
+FILES WRITTEN (every command):
+  <OUT>/logs/<RUN-ID>/audit.jsonl        Hash-chained log of the run (rv-certcheck verify-log checks
+  it).
+  <OUT>/logs/<RUN-ID>/audit.log          The same, human-readable.
+  <OUT>/logs/<RUN-ID>/environment.json   Tool version, OS, host, user, command line.
+  <OUT>/reports/<RUN-ID>/report.json|.txt  What was created or checked, with the SHA-256 of every
+  file.
+  --out (PEM CSR) and the encrypted key (default <OUT-FILE>.key.p8)
 ```
 
 ### rv-certcheck csr show
@@ -772,15 +1225,50 @@ Options:
 ```text
 Display a CSR and check its self-signature
 
-Usage: rv-certcheck csr show <FILE>
+Usage: rv-certcheck csr show [OPTIONS] <FILE>
 
 Arguments:
   <FILE>
-          The CSR (PEM or DER)
+          The CSR (PEM or DER).
+          Default: none (required)
+          Example: requests/ana-ruiz.csr
 
 Options:
+      --out <DIR>
+          Folder for the run's audit log and report: <OUT>/logs/<RUN-ID>/ and
+          <OUT>/reports/<RUN-ID>/.
+          Default: rakvor-out
+          Example: --out D:\pki-runs
+
+      --json
+          Print the result as JSON on stdout instead of a summary.
+          Default: off (human-readable summary)
+          Example: --json
+
+      --actor <NAME>
+          Name written in the audit log and in issued.jsonl.
+          Default: the operating-system user name
+          Example: --actor "Ana Ruiz"
+
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
+
+EXIT CODES:
+  0  Done.
+  1  Runtime error (file not readable, wrong password or PIN, token or crypto failure). Audited.
+  2  Usage error (bad option value, empty subject, unknown profile or reason).
+  3  Refused by a safety rule, or verification failed: root key on a token without --confirm-root,
+     client-internal profile (needs the CP/CPS, rv-certcheck#2), a file that would be overwritten, a
+     key that does not match its certificate, a CA folder whose issued.jsonl or files do not verify,
+     a key that does not match (keys match). Nothing is issued. Audited.
+
+FILES WRITTEN (every command):
+  <OUT>/logs/<RUN-ID>/audit.jsonl        Hash-chained log of the run (rv-certcheck verify-log checks
+  it).
+  <OUT>/logs/<RUN-ID>/audit.log          The same, human-readable.
+  <OUT>/logs/<RUN-ID>/environment.json   Tool version, OS, host, user, command line.
+  <OUT>/reports/<RUN-ID>/report.json|.txt  What was created or checked, with the SHA-256 of every
+  file.
 ```
 
 ## rv-certcheck lab
@@ -804,23 +1292,78 @@ Options:
 ```text
 Write a reproducible lab set and its expected_findings.json
 
-Usage: rv-certcheck lab make [OPTIONS] --out <DIR>
+Usage: rv-certcheck lab make [OPTIONS] --lab-out <DIR>
 
 Options:
       --set <NAME>
-          Set name: full or minimal. Default: full
+          Set name: full or minimal.
+          Default: full
+          Example: --set minimal
 
       --seed <N>
-          Seed (same seed = byte-identical set). Default: 1
+          Seed (same seed, set and base time = byte-identical set).
+          Default: 1
+          Example: --seed 42
 
       --base-time <TIME>
-          Reference time for every validity period. Default: 2026-01-01T00:00:00Z
+          Reference time every validity period derives from (never the wall clock).
+          Default: 2026-01-01T00:00:00Z
+          Example: --base-time 2027-06-01
+
+      --lab-out <DIR>
+          Folder for the set (empty or missing).
+          Default: none (required)
+          Example: --lab-out lab-full-1
 
       --out <DIR>
-          Output folder (empty or missing). Example: --out lab-full-1
+          Folder for the run's audit log and report: <OUT>/logs/<RUN-ID>/ and
+          <OUT>/reports/<RUN-ID>/.
+          Default: rakvor-out
+          Example: --out D:\pki-runs
+
+      --json
+          Print the result as JSON on stdout instead of a summary.
+          Default: off (human-readable summary)
+          Example: --json
+
+      --actor <NAME>
+          Name written in the audit log and in issued.jsonl.
+          Default: the operating-system user name
+          Example: --actor "Ana Ruiz"
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
+
+CASES (full): valid-chain, expired, not-yet-valid, revoked-by-crl, revoked-by-ocsp, wrong-root,
+  rsa-1024, sha1-signed, md5-signed, bad-eku, name-constraint-violation, broken-signature,
+  key-mismatch.
+  minimal: valid-chain, expired, revoked-by-crl, key-mismatch. Each case lists its expected and
+  forbidden finding codes and the code `openssl verify` gives at the base time.
+
+EXAMPLES:
+  rv-certcheck lab make --set full --seed 1 --lab-out lab-full-1
+  rv-certcheck lab make --set minimal --seed 7 --base-time 2027-06-01 --lab-out lab-min-7
+
+EXIT CODES:
+  0  Done.
+  1  Runtime error (file not readable, wrong password or PIN, token or crypto failure). Audited.
+  2  Usage error (bad option value, empty subject, unknown profile or reason).
+  3  Refused by a safety rule, or verification failed: root key on a token without --confirm-root,
+     client-internal profile (needs the CP/CPS, rv-certcheck#2), a file that would be overwritten, a
+     key that does not match its certificate, a CA folder whose issued.jsonl or files do not verify,
+     a key that does not match (keys match). Nothing is issued. Audited.
+
+FILES WRITTEN (every command):
+  <OUT>/logs/<RUN-ID>/audit.jsonl        Hash-chained log of the run (rv-certcheck verify-log checks
+  it).
+  <OUT>/logs/<RUN-ID>/audit.log          The same, human-readable.
+  <OUT>/logs/<RUN-ID>/environment.json   Tool version, OS, host, user, command line.
+  <OUT>/reports/<RUN-ID>/report.json|.txt  What was created or checked, with the SHA-256 of every
+  file.
+  --lab-out/ca/*, --lab-out/<case>/*, --lab-out/expected_findings.json
+
+Lab material: every key, salt and serial of a lab set derives from its seed and is public. Never use
+a lab certificate or key for anything real.
 ```
 
 ## rv-certcheck keys
@@ -848,17 +1391,52 @@ Usage: rv-certcheck keys match [OPTIONS] <KEY> <CERT>
 
 Arguments:
   <KEY>
-          Private key (PEM/DER, PKCS#8/PKCS#1/SEC1) or PKCS#12
+          Private key (PEM/DER, PKCS#8/PKCS#1/SEC1) or PKCS#12.
+          Default: none (required)
+          Example: keys/ana-ruiz.key.p8
 
   <CERT>
-          Certificate (PEM or DER)
+          Certificate (PEM or DER).
+          Default: none (required)
+          Example: certs/5f3a09c1.crt
 
 Options:
       --pass-env <VAR>
-          Environment variable with the key or PKCS#12 password. Default: RV_KEY_PASSWORD
+          Environment variable with the key or PKCS#12 password (prompted without echo when unset).
+          Default: RV_KEY_PASSWORD
+          Example: --pass-env ANA_KEY_PASS
+
+      --out <DIR>
+          Folder for the run's audit log and report: <OUT>/logs/<RUN-ID>/ and
+          <OUT>/reports/<RUN-ID>/.
+          Default: rakvor-out
+          Example: --out D:\pki-runs
+
+      --json
+          Print the result as JSON on stdout instead of a summary.
+          Default: off (human-readable summary)
+          Example: --json
+
+      --actor <NAME>
+          Name written in the audit log and in issued.jsonl.
+          Default: the operating-system user name
+          Example: --actor "Ana Ruiz"
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
+
+EXIT CODES:
+  0  The key belongs to the certificate.
+  1  Runtime error (unreadable file, wrong password, not implemented in this build).
+  3  The key does NOT belong to the certificate.
+
+FILES WRITTEN (every command):
+  <OUT>/logs/<RUN-ID>/audit.jsonl        Hash-chained log of the run (rv-certcheck verify-log checks
+  it).
+  <OUT>/logs/<RUN-ID>/audit.log          The same, human-readable.
+  <OUT>/logs/<RUN-ID>/environment.json   Tool version, OS, host, user, command line.
+  <OUT>/reports/<RUN-ID>/report.json|.txt  What was created or checked, with the SHA-256 of every
+  file.
 ```
 
 ## rv-certcheck tokens
@@ -869,7 +1447,7 @@ PKCS#11 hardware tokens: list slots, tokens and keys
 Usage: rv-certcheck tokens <COMMAND>
 
 Commands:
-  list  List PKCS#11 slots, tokens and (after login) keys
+  list  List PKCS#11 slots and tokens; with --token-serial, log in and list that token's keys
   help  Print this message or the help of the given subcommand(s)
 
 Options:
@@ -880,16 +1458,68 @@ Options:
 ### rv-certcheck tokens list
 
 ```text
-List PKCS#11 slots, tokens and (after login) keys
+List PKCS#11 slots and tokens; with --token-serial, log in and list that token's keys
 
-Usage: rv-certcheck tokens list --pkcs11-module <LIB>
+Usage: rv-certcheck tokens list [OPTIONS] --pkcs11-module <LIB>
 
 Options:
       --pkcs11-module <LIB>
-          PKCS#11 module (vendor library). Example: --pkcs11-module /usr/lib/softhsm/libsofthsm2.so
+          PKCS#11 module (vendor library).
+          Default: none (required)
+          Example: --pkcs11-module /usr/lib/softhsm/libsofthsm2.so
+
+      --token-serial <SERIAL>
+          Log in to this token and list its keys (public facts only).
+          Default: none (no login)
+          Example: --token-serial 0012345678
+
+      --pin-env <VAR>
+          Environment variable holding the token PIN (never logged; prompted without echo when
+          unset).
+          Default: RV_TOKEN_PIN
+          Example: --pin-env YUBIKEY_PIN
+
+      --out <DIR>
+          Folder for the run's audit log and report: <OUT>/logs/<RUN-ID>/ and
+          <OUT>/reports/<RUN-ID>/.
+          Default: rakvor-out
+          Example: --out D:\pki-runs
+
+      --json
+          Print the result as JSON on stdout instead of a summary.
+          Default: off (human-readable summary)
+          Example: --json
+
+      --actor <NAME>
+          Name written in the audit log and in issued.jsonl.
+          Default: the operating-system user name
+          Example: --actor "Ana Ruiz"
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
+
+EXAMPLES:
+  rv-certcheck tokens list --pkcs11-module "C:\Program Files\Yubico\Yubico PIV
+  Tool\bin\libykcs11.dll"
+  rv-certcheck tokens list --pkcs11-module /usr/lib/softhsm/libsofthsm2.so --token-serial
+  7e29d86a112d890d --pin-env SOFTHSM_PIN
+
+EXIT CODES:
+  0  Done.
+  1  Runtime error (file not readable, wrong password or PIN, token or crypto failure). Audited.
+  2  Usage error (bad option value, empty subject, unknown profile or reason).
+  3  Refused by a safety rule, or verification failed: root key on a token without --confirm-root,
+     client-internal profile (needs the CP/CPS, rv-certcheck#2), a file that would be overwritten, a
+     key that does not match its certificate, a CA folder whose issued.jsonl or files do not verify,
+     a key that does not match (keys match). Nothing is issued. Audited.
+
+FILES WRITTEN (every command):
+  <OUT>/logs/<RUN-ID>/audit.jsonl        Hash-chained log of the run (rv-certcheck verify-log checks
+  it).
+  <OUT>/logs/<RUN-ID>/audit.log          The same, human-readable.
+  <OUT>/logs/<RUN-ID>/environment.json   Tool version, OS, host, user, command line.
+  <OUT>/reports/<RUN-ID>/report.json|.txt  What was created or checked, with the SHA-256 of every
+  file.
 ```
 
 ## rv-certcheck trust-list

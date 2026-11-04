@@ -20,9 +20,6 @@ rv-certcheck-certs = { path = "src/certs" }
 # OpenSSL 3 (openssl-src 300.x, vendored: built from source, no system OpenSSL) for path validation, CMS, OCSP,
 # CRL, PKCS#12 and the OpenSSL-style text dump. Apache-2.0 (openssl, openssl-src's OpenSSL 3), MIT (openssl-sys).
 openssl = { version = "0.10.82", features = ["vendored"] }
-# Certificate, CSR and CRL creation; signing goes through rcgen's SigningKey trait (keys in OpenSSL or on a
-# PKCS#11 token), so no ring / aws-lc backend is compiled ("x509-parser" and "zeroize" need "crypto": not enabled).
-rcgen = { version = "0.14.10", default-features = false, features = ["pem"] }
 # Read-only X.509 field extraction (subject, extensions, policies, name constraints).
 x509-parser = "0.18.1"
 pem = "4.0.0"
@@ -38,7 +35,7 @@ rand_chacha = "0.3.1"
 rand_core = "0.6.4"
 # Passwords, PINs and key bytes are wiped from memory when dropped.
 zeroize = { version = "1.9.1", features = ["derive"] }
-# rcgen's date type (validity periods).
+# Dates and validity periods.
 time = "0.3.55"
 md-5 = "0.11"
 sha1 = "0.11"

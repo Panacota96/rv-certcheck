@@ -116,6 +116,7 @@ flowchart TB
 | [docs/theory.md](docs/theory.md) | Why each step works: plain-language part for clients and courts, expert part with algorithms and real values |
 | [docs/admissibility.md](docs/admissibility.md) | Colombia, France/EU, ISO/IEC and US/UK requirements mapped to the tool, gap list, examiner checklist |
 | [docs/usage-cli.md](docs/usage-cli.md) | Every command and option (generated from `--help`) |
+| [docs/company-pki.md](docs/company-pki.md) | Rakvor's own certificates step by step: offline root on a token (key ceremony), intermediate, release code signing, examiner .p12, internal TLS, CSRs, renewal and revocation (internal use only) |
 | [docs/usage-gui.md](docs/usage-gui.md) | Using the desktop app |
 | [docs/architecture.md](docs/architecture.md) | How the engine, CLI and GUI fit together |
 | [docs/forensic-audit.md](docs/forensic-audit.md) | Audit trail, hash chain, evidence handling, ISO/IEC 27037 mapping |

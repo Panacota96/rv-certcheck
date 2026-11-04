@@ -1260,6 +1260,10 @@ pub struct CaFolder {
     pub created_utc: String,
     pub created_by: String,
     pub tool_version: String,
+    /// CRL distribution point URL written into every certificate this CA issues (cRLDistributionPoints), when set.
+    /// Configured by editing ca.json (added by agent B; absent = no CDP).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crl_url: Option<String>,
 }
 
 /// Certificate profiles of `pki issue`.

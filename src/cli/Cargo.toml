@@ -20,6 +20,8 @@ ctrlc.workspace = true
 rpassword.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+pem.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 assert_cmd.workspace = true
@@ -27,3 +29,4 @@ predicates.workspace = true
 tempfile.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+pem.workspace = true

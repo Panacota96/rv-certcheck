@@ -357,18 +357,32 @@ mod tests {
         assert!(openssl::x509::X509::from_der(RAKVOR_ROOT_DER).is_ok());
     }
 
-    /// Every stub says "not implemented: <operation>" until its owner implements it. Each agent deletes its own
-    /// lines here when the function lands (this test is the architect's; edit only your lines).
+    /// Both sides are implemented: no facade answers NotImplemented any more (empty or missing inputs give a
+    /// real error or a result).
     #[test]
-    fn stubs_report_not_implemented() {
+    fn nothing_is_a_stub() {
         fn ni<T: std::fmt::Debug>(r: CertResult<T>) -> bool {
-            match r {
-                Err(e) => e.is_not_implemented(),
-                Ok(_) => true, // implemented: fine
-            }
+            !matches!(r, Err(e) if e.is_not_implemented())
         }
         let d = Path::new("does-not-exist");
-        // Agent A's lines removed: the analysis functions are implemented.
+        // Both agents' lines removed: nothing is a stub any more, so no call may answer NotImplemented.
+        let opts = ValidationOptions::default();
+        let req = ChainRequest::default();
+        assert!(ni(sniff(b"")));
+        assert!(ni(parse_any(b"", None)));
+        assert!(ni(certificate_text(b"")));
+        assert!(ni(resolve_anchors(&[], None)));
+        assert!(ni(validate_chain(&req, &opts)));
+        assert!(ni(check_revocation(
+            b"",
+            b"",
+            &[],
+            &[],
+            "2026-01-01T00:00:00Z"
+        )));
+        assert!(ni(verify_timestamp_token(b"", None, &req, &opts)));
+        assert!(ni(match_key(b"", None, b"")));
+        assert!(ni(trust_list::list(d)));
         assert!(ni(pki::open(d)));
         assert!(ni(csr::show(b"")));
         assert!(ni(tokens::list(d)));
