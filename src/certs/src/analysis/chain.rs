@@ -7,14 +7,27 @@
 //!
 //! | OpenSSL reported (X509_V_ERR_…)                         | next run                                          |
 //! |---------------------------------------------------------|---------------------------------------------------|
-//! | 2, 18, 19, 20, 21 (path does not reach an anchor)       | the top of the built path is trusted (PARTIAL_CHAIN), never marked as an anchor |
+//! | 2, 18, 19, 20, 21, 27, 28 (path does not reach an anchor; certificate not trusted / rejected) | the top of the built path is trusted (PARTIAL_CHAIN), never marked as an anchor |
 //! | 9, 10, 11, 12 (certificate or CRL not yet valid / expired) | X509_V_FLAG_NO_CHECK_TIME (certificate dates are then compared per depth with OpenSSL's ASN1_TIME comparison) |
 //! | 26, 39 (purpose / key usage for the purpose)            | no purpose                                        |
 //! | 3, 5, 8, 11, 12, 15, 16, 23, 33, 35, 36, 44, 54 (CRL)   | CRL checking off (revocation is still judged by the tool's own check) |
 //! | anything else (signature, name constraints, ...)        | the walk stops: recorded in `notes`               |
 //!
+//! Findings per error: 2, 18–21, 27, 28 → CERT_CHAIN_UNTRUSTED; 4, 6, 7 → CERT_SIGNATURE_INVALID; 9 / 10 →
+//! CERT_NOT_YET_VALID_AT_DATE / CERT_EXPIRED_AT_DATE; 23 → CERT_REVOKED (unless the tool's own check dates the
+//! revocation after the validation time); 26, 39 → CERT_PURPOSE_MISMATCH; 47–49, 51–53 →
+//! CERT_NAME_CONSTRAINT_VIOLATION; the CRL codes → REVOCATION_UNKNOWN; every other code (13, 14, 24, 25, 32, 34,
+//! 37, ...) → CERT_CHAIN_INVALID with OpenSSL's code and reason.
+//!
 //! The first error is therefore OpenSSL's own first answer (what `openssl verify` prints), `errors` lists every
 //! error found, in order, with its depth, and the verdict stays failed whenever any error was found.
+//!
+//! Trust-list anchors (`tl:`): only the certificates of a service of an accepted type (CA/QC, CA/PKC; for the
+//! purpose timestamping also the TSA types) whose status at the validation time is granted, recognised at
+//! national level or accredited (status history included) are trust anchors; the others are offered to OpenSSL
+//! as untrusted certificates, so a path ending in one is built and reported as CERT_CHAIN_UNTRUSTED naming the
+//! service and its status. A listed certificate that is not self-signed is accepted as the anchor itself
+//! (X509_V_FLAG_PARTIAL_CHAIN), as ETSI TS 119 612 lists the service's own certificate.
 //!
 //! CRLs given to OpenSSL: X509_V_FLAG_CRL_CHECK when a CRL by the target's issuer is supplied, plus
 //! X509_V_FLAG_CRL_CHECK_ALL when every certificate of the path below the anchor has a CRL by its issuer. The
@@ -60,35 +73,71 @@ pub fn validate_chain(req: &ChainRequest, opts: &ValidationOptions) -> CertResul
     };
     let at_e = rfc3339_to_epoch(&at)?;
 
+    // Trust-list anchors: only certificates of a service of an accepted type whose status at `at` is granted,
+    // recognised or accredited (status history included). The others are withheld: offered to OpenSSL as
+    // untrusted certificates, so that a path ending in one is built, named and reported as untrusted.
     let mut anchors: Vec<(X509, String)> = vec![];
+    let mut withheld: Vec<(Vec<u8>, String, crate::trustlist::store::Withheld)> = vec![];
+    let mut partial = false;
     for a in req.anchors {
         for c in &a.certificates {
-            if let Ok(x) = X509::from_der(&c.der) {
-                anchors.push((x, a.spec.clone()));
+            let Ok(x) = X509::from_der(&c.der) else {
+                continue;
+            };
+            match &a.snapshot {
+                Some(snap) => match crate::trustlist::store::anchor_standing(
+                    snap,
+                    &c.sha256,
+                    &at,
+                    opts.purpose,
+                ) {
+                    Ok(()) => {
+                        // ETSI semantics: the listed certificate itself is the anchor, even when it is not
+                        // self-signed (a TSA unit or a subordinate CA listed directly).
+                        partial |= x.issued(&x) != X509VerifyResult::OK;
+                        anchors.push((x, a.spec.clone()))
+                    }
+                    Err(w) => withheld.push((c.der.clone(), a.spec.clone(), w)),
+                },
+                None => anchors.push((x, a.spec.clone())),
             }
         }
     }
+    withheld.retain(|(d, ..)| {
+        !anchors
+            .iter()
+            .any(|(a, _)| a.to_der().ok().as_deref() == Some(&d[..]))
+    });
     let target_der = target.to_der().map_err(|e| parse_err("target", e))?;
     let mut untrusted: Vec<X509> = vec![];
-    for d in req.untrusted_der {
+    for d in req.untrusted_der.iter().chain(withheld.iter().map(|(d, ..)| d)) {
         if let Ok(x) = X509::from_der(d) {
-            if x.to_der().ok().as_deref() != Some(&target_der[..]) {
+            let xd = x.to_der().ok();
+            if xd.as_deref() != Some(&target_der[..])
+                && !untrusted.iter().any(|u| u.to_der().ok() == xd)
+            {
                 untrusted.push(x);
             }
         }
+    }
+    for (_, spec, w) in &withheld {
+        notes.push(format!(
+            "{spec}: a listed certificate of the service \"{}\" ({}) is not used as an anchor: status at {at} is {}",
+            w.service, w.service_type, w.status
+        ));
     }
     let mut crls = req.crls.to_vec();
     let mut ocsp = req.ocsp.to_vec();
     let mut fetches = vec![];
 
-    let mut walk = run_walk(&target, &anchors, &untrusted, &crls, at_e, opts.purpose)?;
+    let mut walk = run_walk(&target, &anchors, &untrusted, &crls, at_e, opts.purpose, partial)?;
     if opts.online {
         let (more_crls, more_ocsp, f) = super::online::fetch_for_chain(&walk.chain);
         fetches = f;
         if !more_crls.is_empty() || !more_ocsp.is_empty() {
             crls.extend(more_crls);
             ocsp.extend(more_ocsp);
-            walk = run_walk(&target, &anchors, &untrusted, &crls, at_e, opts.purpose)?;
+            walk = run_walk(&target, &anchors, &untrusted, &crls, at_e, opts.purpose, partial)?;
         }
     }
     notes.extend(walk.notes.iter().cloned());
@@ -176,10 +225,32 @@ pub fn validate_chain(req: &ChainRequest, opts: &ValidationOptions) -> CertResul
         let sig = match e.code {
             c if is_untrusted_code(c) => {
                 untrusted_chain = true;
-                Signal::of(codes::CERT_CHAIN_UNTRUSTED)
-                    .with("subject", &target_subject)
-                    .with("reason", &e.reason)
-                    .with("code", e.code.to_string())
+                // A path that ends in a withheld trust-list certificate names its service and status.
+                let held = nodes.iter().find_map(|n| {
+                    withheld
+                        .iter()
+                        .find(|(d, ..)| *d == n.cert.der)
+                        .map(|(_, spec, w)| (n, spec, w))
+                });
+                match held {
+                    Some((n, spec, w)) => Signal::of(codes::CERT_CHAIN_UNTRUSTED)
+                        .with("subject", &target_subject)
+                        .with(
+                            "reason",
+                            format!(
+                                "{}; {} is listed in {spec}, but its service \"{}\" has status {} at {at}, so it is not a trust anchor at that date",
+                                e.reason, n.cert.subject, w.service, w.status
+                            ),
+                        )
+                        .with("code", e.code.to_string())
+                        .with("trust_list", spec.clone())
+                        .with("service", &w.service)
+                        .with("service_status", &w.status),
+                    None => Signal::of(codes::CERT_CHAIN_UNTRUSTED)
+                        .with("subject", &target_subject)
+                        .with("reason", &e.reason)
+                        .with("code", e.code.to_string()),
+                }
             }
             4 | 6 | 7 => Signal::of(codes::CERT_SIGNATURE_INVALID)
                 .with("subject", subj)
@@ -217,8 +288,10 @@ pub fn validate_chain(req: &ChainRequest, opts: &ValidationOptions) -> CertResul
             c if is_crl_code(c) => Signal::of(codes::REVOCATION_UNKNOWN)
                 .with("subject", subj)
                 .with("source", format!("OpenSSL: {} (code {c})", e.reason)),
-            _ => Signal::of(codes::CERT_CHAIN_UNTRUSTED)
-                .with("subject", &target_subject)
+            // Every other verify error (13, 14, 24, 25, 32, 34, 37, ...): the path was examined and a check
+            // failed, which is not the same as not reaching an anchor.
+            _ => Signal::of(codes::CERT_CHAIN_INVALID)
+                .with("subject", subj)
                 .with("reason", &e.reason)
                 .with("code", e.code.to_string()),
         };
@@ -529,6 +602,8 @@ struct Relax {
     no_purpose: bool,
     no_crl: bool,
     extra_trust: Vec<X509>,
+    /// X509_V_FLAG_PARTIAL_CHAIN from the start: a trust-list anchor that is not self-signed is accepted.
+    partial: bool,
 }
 
 fn purpose_id(p: Purpose) -> Option<X509PurposeId> {
@@ -620,7 +695,7 @@ fn verify_once(
             .map_err(e)?;
         flags |= crl_flags;
     }
-    if !relax.extra_trust.is_empty() {
+    if !relax.extra_trust.is_empty() || relax.partial {
         flags |= X509VerifyFlags::PARTIAL_CHAIN;
     }
     let mut param = X509VerifyParam::new().map_err(e)?;
@@ -666,7 +741,12 @@ pub(crate) fn run_walk(
     crl_ders: &[LabeledDer],
     at_e: i64,
     purpose: Purpose,
+    partial: bool,
 ) -> CertResult<Walk> {
+    let base = Relax {
+        partial,
+        ..Relax::default()
+    };
     let pid = purpose_id(purpose);
     let crls: Vec<openssl::x509::X509Crl> = crl_ders
         .iter()
@@ -686,7 +766,7 @@ pub(crate) fn run_walk(
         X509VerifyFlags::empty(),
         at_e,
         pid,
-        &Relax::default(),
+        &base,
     )?;
     let mut crl_flags = X509VerifyFlags::empty();
     let file = if !crls.is_empty() && has_crl_for(target, &crls) {
@@ -719,7 +799,7 @@ pub(crate) fn run_walk(
     };
     let crl_path = file.as_ref().and_then(|f| f.0.as_deref());
 
-    let mut relax = Relax::default();
+    let mut relax = base.clone();
     let mut errors: Vec<ChainError> = vec![];
     let mut first: Option<(i32, String)> = None;
     let mut chain = probe.chain;

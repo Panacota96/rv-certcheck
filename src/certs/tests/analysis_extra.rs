@@ -756,3 +756,128 @@ fn a_pem_with_a_certificate_and_an_encrypted_key_keeps_the_certificate() {
     let e = parse_any(&enc, Some(&Secret::new("wrong"))).unwrap_err();
     assert_eq!(e.kind, ErrorKind::Password);
 }
+
+fn withdrawn_anchor(dir: &Path) -> Vec<ResolvedAnchor> {
+    trust_list::import_eu(
+        &read(tl("tl-withdrawn.xml")),
+        "file:tl-withdrawn.xml",
+        "2026-11-03T10:15:00Z",
+        dir,
+    )
+    .unwrap();
+    resolve_anchors(
+        &[AnchorSpec::TrustList {
+            list: TrustListKind::Eu,
+            snapshot: "latest".into(),
+        }],
+        Some(dir),
+    )
+    .unwrap()
+}
+
+#[test]
+fn trust_list_service_withdrawn_before_the_date_is_not_an_anchor() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = withdrawn_anchor(dir.path());
+    // The lab root's service was withdrawn on 2026-03-01: at 2026-06-01 the chain is untrusted, not valid.
+    let v = verdict(&der("leaf.crt"), &a, &crl(), &[], &opts(AT, Purpose::Any));
+    assert_eq!(v.status, ChainStatus::Untrusted, "{v:#?}");
+    assert!(!has(&v, codes::CERT_CHAIN_VALID), "{v:#?}");
+    let s = v
+        .signals
+        .iter()
+        .find(|s| s.code == codes::CERT_CHAIN_UNTRUSTED && s.params.contains_key("service"))
+        .unwrap_or_else(|| panic!("untrusted with the service named: {v:#?}"));
+    assert_eq!(s.params["service"], "Lab Root CA (withdrawn before the date)");
+    assert!(s.params["service_status"].ends_with("/withdrawn"), "{s:?}");
+    assert!(s.params["reason"].contains("withdrawn"), "{s:?}");
+    assert!(v.nodes.iter().all(|n| n.anchor.is_none()), "{v:#?}");
+    // Before the withdrawal the same snapshot anchors the chain.
+    let v = verdict(
+        &der("leaf.crt"),
+        &a,
+        &[],
+        &[],
+        &opts("2026-02-01T00:00:00Z", Purpose::Any),
+    );
+    assert_eq!(v.status, ChainStatus::Valid, "{v:#?}");
+}
+
+#[test]
+fn trust_list_service_withdrawn_after_the_date_is_an_anchor() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = withdrawn_anchor(dir.path());
+    // The unrelated root's service is withdrawn on 2026-09-01: granted at 2026-06-01, withdrawn at 2026-10-01.
+    let v = verdict(
+        &der("leaf-wrong-root.crt"),
+        &a,
+        &[],
+        &[],
+        &opts(AT, Purpose::Any),
+    );
+    assert_eq!(v.status, ChainStatus::Valid, "{v:#?}");
+    assert!(has(&v, codes::CERT_CHAIN_VALID));
+    let v = verdict(
+        &der("leaf-wrong-root.crt"),
+        &a,
+        &[],
+        &[],
+        &opts("2026-10-01T00:00:00Z", Purpose::Any),
+    );
+    assert_eq!(v.status, ChainStatus::Untrusted, "{v:#?}");
+    let s = v
+        .signals
+        .iter()
+        .find(|s| s.code == codes::CERT_CHAIN_UNTRUSTED && s.params.contains_key("service"))
+        .unwrap_or_else(|| panic!("{v:#?}"));
+    assert_eq!(s.params["service"], "Unrelated Root CA (withdrawn after the date)");
+}
+
+#[test]
+fn trust_list_tsa_services_anchor_only_for_timestamping() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = withdrawn_anchor(dir.path());
+    // The TSA's own certificate is listed under a granted TSA/QTST service; its CA's service is withdrawn.
+    let v = verdict(&der("tsa.crt"), &a, &[], &[], &opts(AT, Purpose::Any));
+    assert_eq!(v.status, ChainStatus::Untrusted, "TSA type is not a CA anchor: {v:#?}");
+    let v = verdict(
+        &der("tsa.crt"),
+        &a,
+        &[],
+        &[],
+        &opts(AT, Purpose::Timestamping),
+    );
+    assert_eq!(v.status, ChainStatus::Valid, "QTST anchors timestamping: {v:#?}");
+}
+
+#[test]
+fn colombian_csv_suspended_service_is_not_an_anchor_during_the_suspension() {
+    let dir = tempfile::tempdir().unwrap();
+    trust_list::import_co_csv(
+        &read(tl("co-sample.csv")),
+        "file:co-sample.csv",
+        "2026-11-03T10:15:00Z",
+        dir.path(),
+    )
+    .unwrap();
+    let a = resolve_anchors(
+        &[AnchorSpec::TrustList {
+            list: TrustListKind::Co,
+            snapshot: "latest".into(),
+        }],
+        Some(dir.path()),
+    )
+    .unwrap();
+    let v = verdict(&der("leaf.crt"), &a, &[], &[], &opts(AT, Purpose::Any));
+    assert_eq!(v.status, ChainStatus::Valid, "accredited at {AT}: {v:#?}");
+    let v = verdict(
+        &der("leaf.crt"),
+        &a,
+        &[],
+        &[],
+        &opts("2026-07-15T00:00:00Z", Purpose::Any),
+    );
+    assert_eq!(v.status, ChainStatus::Untrusted, "suspended: {v:#?}");
+    assert!(v.signals.iter().any(|s| s.code == codes::CERT_CHAIN_UNTRUSTED
+        && s.params.get("service_status").map(String::as_str) == Some("suspended")));
+}

@@ -154,8 +154,12 @@ pub mod codes {
     // Chain and certificate (agent A). Params in brackets are what the i18n text uses.
     /// info [subject, anchor, at]
     pub const CERT_CHAIN_VALID: &str = "CERT_CHAIN_VALID";
-    /// high [subject, reason, code, depth]
+    /// high [subject, reason, code, depth]; for a path ending in a trust-list certificate whose service is not
+    /// granted / recognised / accredited at the date, also [trust_list, service, service_status].
     pub const CERT_CHAIN_UNTRUSTED: &str = "CERT_CHAIN_UNTRUSTED";
+    /// high [subject, depth, reason, code]: an OpenSSL verify error not mapped to a more specific finding
+    /// (13, 14, 24, 25, 32, 34, 37, ...): the path was examined and is invalid, not merely untrusted.
+    pub const CERT_CHAIN_INVALID: &str = "CERT_CHAIN_INVALID";
     /// high [subject, depth, reason]
     pub const CERT_SIGNATURE_INVALID: &str = "CERT_SIGNATURE_INVALID";
     /// high [subject, not_after, at]
@@ -210,6 +214,7 @@ pub mod codes {
     pub const FINDINGS: &[(&str, &str)] = &[
         (CERT_CHAIN_VALID, "info"),
         (CERT_CHAIN_UNTRUSTED, "high"),
+        (CERT_CHAIN_INVALID, "high"),
         (CERT_SIGNATURE_INVALID, "high"),
         (CERT_EXPIRED_AT_DATE, "high"),
         (CERT_NOT_YET_VALID_AT_DATE, "high"),

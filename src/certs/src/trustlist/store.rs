@@ -240,3 +240,101 @@ pub(crate) fn norm_time(s: &str) -> String {
         _ => s.trim().to_string(),
     }
 }
+
+/// ETSI TS 119 612 service statuses under which a listed certificate is used as a trust anchor: `granted` and
+/// `recognisedatnationallevel` (TS 119 612 v2, `…/TrustedList/Svcstatus/…`), `accredited` (v1 `…/Svcstatus/…`)
+/// and the Colombian CSV's `accredited`. Every other status (withdrawn, deprecatedatnationallevel, suspended,
+/// undersupervision, supervisionincessation, …) and "not listed at that date" withholds the certificate.
+pub(crate) fn status_trusted(status: &str) -> bool {
+    let last = status
+        .trim()
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    matches!(
+        last.as_str(),
+        "granted" | "recognisedatnationallevel" | "accredited"
+    )
+}
+
+/// Kind of a service type: ETSI `…/Svctype/CA/QC` or `CA/PKC` (certificate issuance) and `…/Svctype/TSA`,
+/// `TSA/QTST`, `TSA/TSS-QC`, `TSA/TSS-AdESQCandQES` (timestamping), or the CSV's `CA/QC` / `TSA`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ServiceKind {
+    Ca,
+    Tsa,
+}
+
+pub(crate) fn service_kind(service_type: &str) -> Option<ServiceKind> {
+    let t = service_type.trim();
+    let t = t.rsplit_once("Svctype/").map(|(_, s)| s).unwrap_or(t);
+    let up = t.to_ascii_uppercase();
+    match up.as_str() {
+        "CA/QC" | "CA/PKC" => Some(ServiceKind::Ca),
+        "TSA" => Some(ServiceKind::Tsa),
+        _ if up.starts_with("TSA/") => Some(ServiceKind::Tsa),
+        _ => None,
+    }
+}
+
+/// Why a trust-list certificate is not used as an anchor at a date.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Withheld {
+    pub service: String,
+    pub service_type: String,
+    pub status: String,
+}
+
+/// Ok when at least one service listing the certificate (`cert_sha256`) is of a kind accepted for `purpose`
+/// (CA types always; TSA types only for `timestamping`) and has a trusted status at `at`
+/// ([`status_trusted`], status history included). Otherwise the service that best explains the refusal.
+pub(crate) fn anchor_standing(
+    snapshot: &TrustListSnapshot,
+    cert_sha256: &str,
+    at: &str,
+    purpose: Purpose,
+) -> Result<(), Withheld> {
+    let mut first: Option<Withheld> = None;
+    for e in snapshot
+        .entries
+        .iter()
+        .filter(|e| e.cert_sha256 == cert_sha256)
+    {
+        let Some(svc) = snapshot.services.get(e.service_index as usize) else {
+            continue;
+        };
+        let status = status_at(svc, at);
+        let kind_ok = match service_kind(&svc.service_type) {
+            Some(ServiceKind::Ca) => true,
+            Some(ServiceKind::Tsa) => purpose == Purpose::Timestamping,
+            None => false,
+        };
+        if kind_ok && status_trusted(&status) {
+            return Ok(());
+        }
+        let w = Withheld {
+            service: svc.service_name.clone(),
+            service_type: if kind_ok {
+                svc.service_type.clone()
+            } else {
+                format!(
+                    "{} (a type not accepted as an anchor for the purpose {})",
+                    svc.service_type,
+                    purpose.name()
+                )
+            },
+            status,
+        };
+        // Prefer explaining by the status of an accepted type over a type mismatch.
+        if first.is_none() || (kind_ok && first.as_ref().is_some_and(|f| f.service_type.contains("not accepted"))) {
+            first = Some(w);
+        }
+    }
+    Err(first.unwrap_or(Withheld {
+        service: "none".into(),
+        service_type: String::new(),
+        status: "not listed".into(),
+    }))
+}

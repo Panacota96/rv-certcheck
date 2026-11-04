@@ -141,14 +141,19 @@
       "does_not_prove": "Quelle version est l'originale ni pourquoi le contenu a changé."
     },
     "CERT_CHAIN_VALID": {
-      "title": "Chaîne de certificats valide à la date vérifiée",
-      "shows": "OpenSSL a construit un chemin de %{subject} jusqu'à l'ancre de confiance %{anchor} et tous les contrôles ont réussi (signatures, validité au %{at}, usage, contraintes et informations de révocation fournies).",
-      "does_not_prove": "Que le titulaire du certificat ait signé ou approuvé un document précis, que l'ancre mérite la confiance (cela relève du choix de --anchor par l'expert), ni que le résultat soit le même à une autre date."
+      "title": "Chaîne de certificats vérifiée à la date contrôlée",
+      "shows": "OpenSSL a construit un chemin de %{subject} jusqu'à l'ancre de confiance %{anchor} et la chaîne a été vérifiée au %{at} : signatures, dates de validité, usage et contraintes ont réussi les contrôles. La révocation est signalée à part : une constatation REVOCATION_UNKNOWN pour le même certificat signifie que son statut de révocation n'a pas pu être déterminé.",
+      "does_not_prove": "Que le certificat n'était pas révoqué (voir les constatations de révocation), que le titulaire du certificat ait signé ou approuvé un document précis, que l'ancre mérite la confiance (cela relève du choix de --anchor par l'expert), ni que le résultat soit le même à une autre date."
     },
     "CERT_CHAIN_UNTRUSTED": {
       "title": "La chaîne n'aboutit pas à une ancre de confiance",
       "shows": "Aucun chemin de %{subject} vers les ancres indiquées n'a pu être complété. OpenSSL a signalé à la profondeur %{depth} : %{reason} (code %{code}).",
       "does_not_prove": "Que le certificat soit falsifié ou invalide : l'autorité émettrice peut simplement ne pas figurer parmi les ancres choisies, ou un certificat intermédiaire peut manquer dans les éléments examinés."
+    },
+    "CERT_CHAIN_INVALID": {
+      "title": "Chaîne de certificats invalide",
+      "shows": "Le chemin de %{subject} a été examiné et OpenSSL l'a rejeté à la profondeur %{depth} : %{reason} (code %{code}). La chaîne est invalide, pas seulement non fiable.",
+      "does_not_prove": "Que le certificat ait été falsifié ni qui l'a produit ; un certificat mal formé ou endommagé, une autorité mal configurée ou une extension manquante donnent le même résultat."
     },
     "CERT_SIGNATURE_INVALID": {
       "title": "La signature du certificat ne se vérifie pas",
@@ -232,8 +237,8 @@
     },
     "TIMESTAMP_TOKEN_VALID": {
       "title": "Jeton d'horodatage valide",
-      "shows": "Le jeton RFC 3161 indique l'heure %{gen_time} ; sa signature par %{tsa} se vérifie (politique %{policy}, empreinte %{hash_algorithm}) et la chaîne du certificat de l'autorité d'horodatage était valide à ce moment.",
-      "does_not_prove": "Que les données horodatées soient authentiques ni qui les a soumises ; cela prouve seulement que des données ayant cette empreinte existaient à ce moment, dans la mesure où l'on fait confiance à l'autorité et aux ancres choisies."
+      "shows": "Le jeton RFC 3161 indique l'heure %{gen_time} ; sa signature par %{tsa} se vérifie (politique %{policy}, empreinte %{hash_algorithm}) et la chaîne du certificat de l'autorité d'horodatage était valide à ce moment. Empreinte contrôlée par rapport à un fichier de preuve de l'exécution : %{imprint_checked} (%{imprint_file}) ; si c'est no, le jeton n'est lié à aucun fichier et montre seulement que des données ayant son empreinte existaient à genTime.",
+      "does_not_prove": "Que les données horodatées soient authentiques ni qui les a soumises ; cela montre seulement que des données ayant cette empreinte existaient à genTime, dans la mesure où l'on fait confiance à l'autorité et aux ancres choisies."
     },
     "TIMESTAMP_TOKEN_INVALID": {
       "title": "Le jeton d'horodatage ne se vérifie pas",
@@ -275,7 +280,7 @@
     "SIGNATURE_TABLE_LIMITED": "La détection du type repose sur une table limitée de signatures courantes ; les types inconnus sont signalés comme inconnus, non comme suspects.",
     "TIMESTAMPS_FROM_FILESYSTEM": "Les dates de modification proviennent du système de fichiers de la copie examinée et peuvent différer de la source d'origine.",
     "CLEAN_RESULT_IS_NOT_AUTHENTICITY": "Un résultat sans constatation ne prouve pas qu'un fichier est authentique ni qu'il n'a pas été modifié avant son acquisition.",
-    "TIMESTAMP_PROVES_EXISTENCE_ONLY": "Un horodatage qualifié prouve que le journal d'audit existait sous cette forme exacte à l'heure indiquée ; il ne prouve pas que la copie examinée correspond à la source d'origine.",
+    "TIMESTAMP_PROVES_EXISTENCE_ONLY": "Un horodatage de confiance du journal d'audit montre que le journal existait sous cette forme exacte à l'heure indiquée ; il ne montre pas que la copie examinée correspond à la source d'origine.",
     "VALIDATION_IS_AS_OF_THE_DATE_GIVEN": "Chaque chaîne est évaluée à un instant unique (--at, consigné dans chaque rapport) ; un même certificat peut être valide à une date et expiré ou révoqué à une autre.",
     "OFFLINE_REVOCATION_DEPENDS_ON_SUPPLIED_FILES": "Hors ligne, la révocation n'est vérifiée qu'avec les CRL et réponses OCSP fournies (--crl, --ocsp, ou trouvées parmi les éléments) ; une révocation publiée ailleurs n'est pas vue.",
     "TRUST_LIST_SNAPSHOT_DATED": "Les listes de confiance sont utilisées sous forme d'instantanés datés (date et SHA-256 consignés) ; les services ajoutés, suspendus ou retirés après l'instantané ne sont pas pris en compte.",

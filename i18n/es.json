@@ -141,14 +141,19 @@
       "does_not_prove": "Cuál versión es la original ni por qué cambió el contenido."
     },
     "CERT_CHAIN_VALID": {
-      "title": "Cadena de certificados válida en la fecha verificada",
-      "shows": "OpenSSL construyó una ruta desde %{subject} hasta el ancla de confianza %{anchor} y todas las verificaciones fueron superadas (firmas, vigencia a %{at}, propósito, restricciones y la información de revocación suministrada).",
-      "does_not_prove": "Que el titular del certificado haya firmado o aprobado un documento concreto, que el ancla merezca confianza (eso depende del --anchor elegido por el perito) ni que el resultado sea el mismo en otra fecha."
+      "title": "Cadena de certificados verificada en la fecha indicada",
+      "shows": "OpenSSL construyó una ruta desde %{subject} hasta el ancla de confianza %{anchor} y la cadena se verificó a %{at}: firmas, fechas de vigencia, propósito y restricciones superaron los controles. La revocación se informa por separado: un hallazgo REVOCATION_UNKNOWN para el mismo certificado significa que no se pudo determinar su estado de revocación.",
+      "does_not_prove": "Que el certificado no estuviera revocado (véanse los hallazgos de revocación), que el titular del certificado haya firmado o aprobado un documento concreto, que el ancla merezca confianza (eso depende del --anchor elegido por el perito) ni que el resultado sea el mismo en otra fecha."
     },
     "CERT_CHAIN_UNTRUSTED": {
       "title": "La cadena no llega a un ancla de confianza",
       "shows": "No se pudo completar ninguna ruta desde %{subject} hasta las anclas indicadas. OpenSSL informó en la profundidad %{depth}: %{reason} (código %{code}).",
       "does_not_prove": "Que el certificado sea falso o inválido: puede que la autoridad emisora no esté entre las anclas elegidas o que falte un certificado intermedio en el material examinado."
+    },
+    "CERT_CHAIN_INVALID": {
+      "title": "Cadena de certificados inválida",
+      "shows": "Se examinó la ruta de %{subject} y OpenSSL la rechazó en la profundidad %{depth}: %{reason} (código %{code}). La cadena es inválida, no solo no confiable.",
+      "does_not_prove": "Que el certificado haya sido falsificado ni quién lo produjo; un certificado mal formado o dañado, una autoridad mal configurada o una extensión ausente dan el mismo resultado."
     },
     "CERT_SIGNATURE_INVALID": {
       "title": "La firma del certificado no se verifica",
@@ -232,8 +237,8 @@
     },
     "TIMESTAMP_TOKEN_VALID": {
       "title": "Sello de tiempo válido",
-      "shows": "El sello RFC 3161 indica la hora %{gen_time}; su firma por %{tsa} se verifica (política %{policy}, huella %{hash_algorithm}) y la cadena del certificado de la TSA era válida en ese momento.",
-      "does_not_prove": "Que los datos sellados sean auténticos ni quién los presentó; solo prueba que existían datos con ese resumen en ese momento, en la medida en que se confíe en la TSA y en las anclas elegidas."
+      "shows": "El sello RFC 3161 indica la hora %{gen_time}; su firma por %{tsa} se verifica (política %{policy}, huella %{hash_algorithm}) y la cadena del certificado de la TSA era válida en ese momento. Huella comprobada contra un archivo de evidencia de la ejecución: %{imprint_checked} (%{imprint_file}); si es no, el sello no está vinculado a ningún archivo y solo muestra que existían datos con ese resumen en genTime.",
+      "does_not_prove": "Que los datos sellados sean auténticos ni quién los presentó; solo muestra que existían datos con ese resumen en genTime, en la medida en que se confíe en la TSA y en las anclas elegidas."
     },
     "TIMESTAMP_TOKEN_INVALID": {
       "title": "El sello de tiempo no se verifica",
@@ -275,7 +280,7 @@
     "SIGNATURE_TABLE_LIMITED": "La detección de tipo usa una tabla limitada de firmas comunes; los tipos desconocidos se reportan como desconocidos, no como sospechosos.",
     "TIMESTAMPS_FROM_FILESYSTEM": "Las fechas de modificación provienen del sistema de archivos de la copia examinada y pueden diferir de la fuente original.",
     "CLEAN_RESULT_IS_NOT_AUTHENTICITY": "Un resultado sin hallazgos no prueba que un archivo sea auténtico ni que no haya sido alterado antes de su adquisición.",
-    "TIMESTAMP_PROVES_EXISTENCE_ONLY": "Un sello de tiempo confiable prueba que el log de auditoría existía en esta forma exacta en la hora indicada; no prueba que la copia examinada coincida con la fuente original.",
+    "TIMESTAMP_PROVES_EXISTENCE_ONLY": "Un sello de tiempo confiable del log de auditoría muestra que el log existía en esta forma exacta en la hora indicada; no muestra que la copia examinada coincida con la fuente original.",
     "VALIDATION_IS_AS_OF_THE_DATE_GIVEN": "Cada cadena se evalúa en un único instante (--at, registrado en cada informe); el mismo certificado puede ser válido en una fecha y estar vencido o revocado en otra.",
     "OFFLINE_REVOCATION_DEPENDS_ON_SUPPLIED_FILES": "Sin conexión, la revocación solo se verifica con las CRL y respuestas OCSP aportadas (--crl, --ocsp, o halladas entre la evidencia); una revocación publicada en otro lugar no se ve.",
     "TRUST_LIST_SNAPSHOT_DATED": "Las listas de confianza se usan como instantáneas fechadas (fecha y SHA-256 registrados); los servicios añadidos, suspendidos o retirados después de la instantánea no se reflejan.",

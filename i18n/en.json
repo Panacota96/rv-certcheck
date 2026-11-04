@@ -141,14 +141,19 @@
       "does_not_prove": "Which version is the original or why the content changed."
     },
     "CERT_CHAIN_VALID": {
-      "title": "Certificate chain valid at the date checked",
-      "shows": "OpenSSL built a path from %{subject} to the trust anchor %{anchor} and every check passed (signatures, validity at %{at}, purpose, constraints and the revocation information supplied).",
-      "does_not_prove": "That the certificate holder signed or approved any particular document, that the anchor deserves trust (that is the examiner's choice of --anchor), or that the result holds at another date."
+      "title": "Certificate chain verified at the date checked",
+      "shows": "OpenSSL built a path from %{subject} to the trust anchor %{anchor} and the chain verified at %{at}: signatures, validity dates, purpose and constraints passed. Revocation is reported separately: a REVOCATION_UNKNOWN finding for the same certificate means its revocation status could not be determined.",
+      "does_not_prove": "That the certificate was not revoked (see the revocation findings), that the certificate holder signed or approved any particular document, that the anchor deserves trust (that is the examiner's choice of --anchor), or that the result holds at another date."
     },
     "CERT_CHAIN_UNTRUSTED": {
       "title": "Chain does not reach a trusted anchor",
       "shows": "No path from %{subject} to any of the anchors given could be completed. OpenSSL reported at depth %{depth}: %{reason} (code %{code}).",
       "does_not_prove": "That the certificate is forged or invalid: the issuing CA may simply not be among the anchors chosen, or an intermediate certificate may be missing from the material examined."
+    },
+    "CERT_CHAIN_INVALID": {
+      "title": "Certificate chain invalid",
+      "shows": "The path of %{subject} was examined and OpenSSL rejected it at depth %{depth}: %{reason} (code %{code}). The chain is invalid, not merely untrusted.",
+      "does_not_prove": "That the certificate was forged or who produced it; a malformed or damaged certificate, a wrongly configured CA or a missing extension give the same result."
     },
     "CERT_SIGNATURE_INVALID": {
       "title": "Certificate signature does not verify",
@@ -232,8 +237,8 @@
     },
     "TIMESTAMP_TOKEN_VALID": {
       "title": "Timestamp token valid",
-      "shows": "The RFC 3161 token states the time %{gen_time}; its signature by %{tsa} verifies (policy %{policy}, imprint %{hash_algorithm}) and the TSA certificate chain was valid at that time.",
-      "does_not_prove": "That the timestamped data is authentic or who submitted it; it proves only that data with this digest existed at that time, as far as the TSA and the anchors chosen are trusted."
+      "shows": "The RFC 3161 token states the time %{gen_time}; its signature by %{tsa} verifies (policy %{policy}, imprint %{hash_algorithm}) and the TSA certificate chain was valid at that time. Imprint checked against an evidence file of the run: %{imprint_checked} (%{imprint_file}); when no, the token is not linked to any file and shows only that some data with its digest existed at genTime.",
+      "does_not_prove": "That the timestamped data is authentic or who submitted it; it shows only that data with this digest existed at genTime, as far as the TSA and the anchors chosen are trusted."
     },
     "TIMESTAMP_TOKEN_INVALID": {
       "title": "Timestamp token does not verify",
@@ -275,7 +280,7 @@
     "SIGNATURE_TABLE_LIMITED": "Type detection uses a limited table of common file signatures; unknown types are reported as unknown, not as suspicious.",
     "TIMESTAMPS_FROM_FILESYSTEM": "Modification times come from the file system of the examined copy and may differ from the original source.",
     "CLEAN_RESULT_IS_NOT_AUTHENTICITY": "A result without findings does not prove that a file is authentic or unaltered before acquisition.",
-    "TIMESTAMP_PROVES_EXISTENCE_ONLY": "A trusted timestamp proves the audit log existed in this exact form at the stated time; it does not prove that the examined copy matches the original source.",
+    "TIMESTAMP_PROVES_EXISTENCE_ONLY": "A trusted timestamp of the audit log shows that the log existed in this exact form at the stated time; it does not show that the examined copy matches the original source.",
     "VALIDATION_IS_AS_OF_THE_DATE_GIVEN": "Every chain is judged at one instant (--at, recorded in each report); the same certificate can be valid at one date and expired or revoked at another.",
     "OFFLINE_REVOCATION_DEPENDS_ON_SUPPLIED_FILES": "Offline, revocation is checked only against the CRLs and OCSP responses supplied (--crl, --ocsp, or found among the evidence); a revocation published elsewhere is not seen.",
     "TRUST_LIST_SNAPSHOT_DATED": "Trust lists are used as dated snapshots (date and SHA-256 recorded); services added, suspended or withdrawn after the snapshot are not reflected.",
