@@ -1,8 +1,10 @@
 # Forensic audit trail
 
-Everything RV CertCheck does is written to `<OUT>/logs/<RUN-ID>/`. The folder is designed so that a second
-examiner, months later, can check **what was done, to which files, by whom, with which tool version**, and
-that the record was not altered.
+Everything RV CertCheck does is written to `<OUT>/logs/<RUN-ID>/`: analysis runs and creation runs alike. The
+folder is designed so that a second examiner, months later, can check **what was done, to which files, with
+which anchors, dates and revocation data, by whom, with which tool and OpenSSL version**, and that the record was
+not altered. Creating certificates adds a second, permanent record in the CA folder: `issued.jsonl`
+([below](#creation-runs-and-the-ca-folders-issuedjsonl)).
 
 | File | Content |
 | --- | --- |
@@ -38,7 +40,7 @@ rv-certcheck verify-log rakvor-out/logs/<RUN-ID>          # exit 0 intact, 3 bro
 python tests/verify_chain.py rakvor-out/logs/<RUN-ID>   # independent re-implementation (chain + hashes.csv)
 ```
 
-> The chain proves the log is **internally consistent**. On its own it does not prove *when* it was written —
+> The chain shows the log is **internally consistent**. On its own it does not prove *when* it was written —
 > that is what the trusted timestamp below adds — nor that it is *complete*: removing the last entries leaves a
 > shorter chain that is still valid. Storing the final `entry_hash` (printed in the statistics report) in your
 > case management system remains good practice.
@@ -101,7 +103,9 @@ sequenceDiagram
   entry `#N` is reported as truncation).
 - Independent check: `openssl ts -verify -digest <head> -in timestamp-<N>.tsr -CAfile <TSA chain>`.
 - `--no-timestamp` (or `RV_NO_TIMESTAMP=1`) disables it; tests use a local TSA (`tests/fake_tsa.py`).
-- **Limitation:** a timestamp proves the log existed at that time, not that its content is true.
+- **Limitation:** a timestamp shows the log existed at that time; it does not prove that its content is true.
+- This timestamp concerns the **audit log**. Timestamp tokens found among the evidence are verified separately by
+  `analyze` ([theory.md B8](theory.md#b8-rfc-3161-tokens-and-ess-signing-certificate)).
 
 ## Signed PDF reports
 
@@ -131,13 +135,63 @@ physical transfers. This is a working aid, not legal advice: check it against th
 | `item_started` | each item | index, size, modified time |
 | `item_hashed` | each item | digests, bytes read, `mtime_unchanged` |
 | `item_error` | unreadable item | error message |
+| `validation_options` | `analyze`, before the items | every `--anchor` (described), the SHA-256 of each anchor file and of each resolved anchor certificate (or the resolution error), `--at` as given, `--purpose`, every `--crl` / `--ocsp` file with its SHA-256, `--online`, `p12_password` "supplied (not recorded)" or "none", the OpenSSL version |
 | `item_analyzed` | each item | detected type, extension, findings, status |
+| `item_certificates_checked` | each cryptographic item, after the loop | kind, number of certificates, per verdict: status, OpenSSL code and reason, depths; failed steps; finding codes; online fetches |
+| `revocation_fetched` | `--online` only, per URL | kind (crl/ocsp), URL, certificate subject, request time, HTTP status, bytes, response SHA-256 or error |
+| `output_written` | each `chain.json` / `certificate.txt` | item, kind, relative file, digest |
 | `item_cancelled` / `run_cancelled` | on cancel | processed count |
 | `duplicate_group` | after the loop | hash, item indexes |
 | `hash_register_written` | | digests of `hashes.csv` |
 | `item_reports_written` | each item | digests of every report file |
 | `statistics_report_written` | | digests of statistics files |
 | `run_finished` / `run_failed` | last | totals, severities, elapsed |
+
+## Creation runs and the CA folder's `issued.jsonl`
+
+Every creation command (`pki init-root/import/issue/revoke/crl/ocsp-sign/show/verify`, `csr new/show`,
+`lab make`, `keys match`, `tokens list`) writes its own run under `--out` (default `rakvor-out`), with the same
+`audit.jsonl` chain rule:
+
+| Action | Key details |
+| --- | --- |
+| `run_started` | tool, version, frontend `cli`, command, parameters (paths, profile, subject, key type, key **location**, validity; never a password or PIN), OpenSSL version |
+| `environment_recorded` | SHA-256 of `environment.json` |
+| `ca_created`, `ca_imported`, `certificate_issued`, `certificate_revoked`, `crl_signed`, `ocsp_signed`, `csr_created`, `lab_set_written`, `key_matched`, `tokens_listed`, `ca_folder_verified` / `ca_folder_verification_failed` | what was done (serial, profile, subject, SHA-256s, CRL number, status) |
+| `file_written` | role, path and SHA-256 of every file written (certificate, CRL, OCSP response, CSR, `.p12`, key file, lab files) |
+| `ca_log_appended` | the CA, the `issued.jsonl` record's `seq`, action, `entry_hash`, serial and certificate SHA-256: **links the run's chain to the CA's chain** |
+| `operation_failed` | error kind and message (a refusal by a safety rule is exit 3) |
+| `report_written`, `run_finished` | SHA-256 of `report.json` / `report.txt`; status and exit code |
+
+Creation runs request no RFC 3161 timestamp; add one with `rv-certcheck timestamp <LOG>` when the record must be
+dated by a third party (e.g. after a key ceremony).
+
+**`issued.jsonl`** (in the CA folder, schema `rakvor.ca/1`) holds one record per CA operation: `ca_created`,
+`ca_imported`, `issued`, `revoked`, `crl_issued`, `ocsp_signed`, with serial, profile, subject, validity,
+certificate SHA-256, file and file SHA-256, revocation reason and time, CRL number, the key's location (never the
+key), actor and tool version. It is chained exactly like `audit.jsonl`:
+
+```mermaid
+flowchart LR
+    G["000…000"] --> R1["#1 ca_created<br/>certs/ca.crt + SHA-256"]
+    R1 --> R2["#2 issued<br/>serial, profile, cert SHA-256"]
+    R2 --> R3["#3 revoked<br/>serial, reason, time"]
+    R3 --> R4["#4 crl_issued<br/>crl/1.crl + SHA-256"]
+    R2 -. "ca_log_appended (entry_hash of #2)" .-> A["run audit.jsonl<br/>of pki issue"]
+    R4 -. "ca_log_appended (entry_hash of #4)" .-> B["run audit.jsonl<br/>of pki crl"]
+```
+
+- **Before every operation** the tool re-verifies the whole chain, that the first record creates or imports this
+  CA's certificate, that `certs/ca.crt` is the certificate recorded in `ca.json`, and the SHA-256 of every file a
+  record names. Any difference stops the CA: nothing is issued until a person investigates.
+- `rv-certcheck pki verify --ca <FOLDER>` runs the same check on demand (exit 3 when broken); run it at the start
+  of every session and before handing a CA folder to a reviewer. `pki show` lists every certificate with its
+  revocation state.
+- What the chain does **not** cover: `ca.json` is outside it (its certificate digest is cross-checked; fields such
+  as `crl_url` or `allowed_profiles` are not), `crl/latest.crl` is an unrecorded copy, and removing the last
+  records of `issued.jsonl` leaves a valid shorter chain. The `ca_log_appended` entries of the creation runs, and
+  their timestamps, are the outside record of its length.
+- Key files are created owner-only and never overwritten; token keys are referenced by token serial and key id.
 
 ## Evidence handling
 
@@ -165,6 +219,8 @@ flowchart LR
 | Justifiability (5.3.5) | Every finding states what it shows and what it does **not** prove; limitations in every report |
 | Preservation (7.1.4) | Read-only access; hashes of every file and of every report produced |
 | Documentation / chain of custody | Hash register, reports, and log folder form the record of the examination |
+| Justifiability of certificate verdicts | Anchors, instant, purpose and revocation files recorded with their SHA-256 (`validation_options`); per-depth OpenSSL codes and the notes on how each verdict was reached (`chain.json`); the OpenSSL version |
+| Auditability of created certificates | `issued.jsonl` chain + `ca_log_appended` cross-links + `pki verify` |
 
 Colombian practice (Ley 906 de 2004, Manual de cadena de custodia) and French practice (Code de procédure
 pénale, art. 156 ff. for expertise) both expect the examiner to document the method and preserve integrity;

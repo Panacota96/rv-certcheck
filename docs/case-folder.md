@@ -1,22 +1,25 @@
 # Case folder
 
 Every Rakvor tool can work alone (`--out DIR`). In a real engagement the tools share **one case folder**
-(`--case-dir`): rv-certcheck, the **intake** tool, registers each evidence file once and gives it an evidence id
-(`E0001`, `E0002`, …); every later **analysis** tool re-hashes each file, compares it with that registry and links
-its own audit chain to the case. A reviewer can then follow one item from intake to the last report, across tools,
-and check that nothing changed in between.
+(`--case-dir`): the **intake** tool (rv-hashinv) registers each evidence file once and gives it an evidence id
+(`E0001`, `E0002`, …); every later **analysis** tool, RV CertCheck among them, re-hashes each file, compares it
+with that registry and links its own audit chain to the case. A reviewer can then follow one certificate, CRL or
+timestamp token from intake to the last report, across tools, and check that nothing changed in between.
 
 ```mermaid
 flowchart LR
-    E[(Evidence<br/>read-only)] --> H["rv-certcheck (intake)<br/>--case-dir CASE"]
+    E[(Evidence<br/>read-only)] --> H["rv-hashinv (intake)<br/>--case-dir CASE"]
     H --> R[["evidence/registry.json<br/>E0001…: path, size, hashes"]]
     H --> CL[["case-log.jsonl<br/>hash-chained"]]
-    R --> P["analysis tool<br/>--case-dir CASE"]
+    R --> P["rv-certcheck analyze (analysis)<br/>--case-dir CASE"]
     P -->|re-hash + compare| R
     P --> CL
-    H --> RH["runs/rv-certcheck/RUN-ID/"]
-    P --> RP["runs/&lt;tool&gt;/RUN-ID/"]
+    H --> RH["runs/rv-hashinv/RUN-ID/"]
+    P --> RP["runs/rv-certcheck/RUN-ID/<br/>+ chain.json, certificate.txt"]
 ```
+
+Only `analyze` uses the case folder. The creation commands (`pki`, `csr`, `lab`, `keys`, `tokens`) and
+`trust-list` are not case work: they write standalone runs (`--out`), and a CA folder is never a case folder.
 
 The contract (schemas, events, rules) is the same in the Rust and Python profiles, and a case written by one is
 read and extended by the other (tested in CI when both are present).
@@ -34,6 +37,7 @@ read and extended by the other (tested in CI when both are present).
   evidence/registry.csv       evidence_id,path,size,<algorithms>,run_id
   runs/<tool>/<RUN-ID>/logs/     audit.jsonl, audit.log, hashes.csv, environment.json, timestamp-*.tsr|.json
   runs/<tool>/<RUN-ID>/reports/  statistics.*, items/<NNNNN>-<NAME>/{technical,summary,custody}.*
+                                 (rv-certcheck adds chain.json and certificate.txt per cryptographic item)
 ```
 
 JSON schemas: [case.schema.json](../schemas/case.schema.json) and [registry.schema.json](../schemas/registry.schema.json).
@@ -41,13 +45,20 @@ JSON schemas: [case.schema.json](../schemas/case.schema.json) and [registry.sche
 ## Using it
 
 ```bash
-# 1. Open the case and register the evidence (creates case.json; --case and --jurisdiction are needed only now)
-rv-certcheck analyze -i D:\evidence -r --case-dir E:\CASE-014 --case CASE-014 --jurisdiction fr
-# 2. Re-examine some registered items later (or run an analysis tool with the same --case-dir)
-rv-certcheck analyze --case-dir E:\CASE-014 --evidence E0001,E0002
-# 3. Check the whole case before handing it over
-rv-certcheck verify-case E:\CASE-014
+# 1. Intake: rv-hashinv opens the case and registers the evidence (creates case.json)
+rv-hashinv scan -i D:\evidence -r --case-dir E:\CASE-014 --case CASE-014 --jurisdiction fr
+# 2. Analysis: every registered item is re-hashed, compared with the registry, then analysed as certificate evidence
+rv-certcheck analyze --case-dir E:\CASE-014 --anchor D:\roots\ca-root.pem --at 2025-03-14 --crl D:\rev\ca.crl
+# 3. Re-examine two registered items with another anchor or date
+rv-certcheck analyze --case-dir E:\CASE-014 --evidence E0001,E0002 --anchor tl:eu@latest
+# 4. Check the whole case before handing it over
+rv-certcheck verify-case E:\CASE-014 --rehash
 ```
+
+The anchors, `--crl` and `--ocsp` files are **not** evidence of the case: they are recorded with their SHA-256 in
+the run's audit entry `validation_options`, not in the registry. Keep copies of them with the case file. A CRL or
+OCSP response that is itself evidence should go through intake like any other item; every CRL and OCSP item of
+the run is used as a revocation source.
 
 In the GUI, fill **Case folder** in section 1. The output folder is then derived (`<case>/runs/rv-certcheck/<RUN-ID>`)
 and locked, the change is audited (`ui_case_dir_changed`), and the result panel lists the evidence id of every
@@ -55,7 +66,7 @@ item.
 
 | Option | Meaning |
 | --- | --- |
-| `--case-dir DIR` | Work in this case folder (created when it has no `case.json`). `--out` is not used. |
+| `--case-dir DIR` | Work in this case folder (created when it has no `case.json`, with no registered items: every input is then reported `EVIDENCE_NOT_IN_CASE_REGISTRY`). `--out` is not used. |
 | `--case ID` | Names the case at creation; afterwards it must match `case.json` (or be left out). |
 | `--jurisdiction co\|fr` | Set at creation; later runs use the case's jurisdiction for custody forms. |
 | `--evidence E0001,E0007` | Examine these registered items (no `--input` needed). |
@@ -63,11 +74,11 @@ item.
 
 ## Roles
 
-The role is one constant: `CASE_ROLE` (`src/core/src/lib.rs`) and `"case_role"` in `.forge.json`. The reference
-rv-certcheck is `intake`; a tool scaffolded from it is `analysis`. Both behaviours live in the shared code and are
-tested in both profiles.
+The role is one constant: `CASE_ROLE` (`src/core/src/lib.rs`) and `"case_role"` in `.forge.json`. **RV CertCheck
+is `analysis`**: it never writes the registry. Both behaviours live in the shared code and are tested in both
+profiles.
 
-| | Intake (rv-certcheck) | Analysis (later tools) |
+| | Intake (rv-hashinv) | Analysis (RV CertCheck) |
 | --- | --- | --- |
 | Registry | Registers every successfully hashed item | Never writes it |
 | Same path, same content | Keeps the existing id (`already_registered`) | `evidence_verified_against_case` (match) |
@@ -110,7 +121,7 @@ sequenceDiagram
 | --- | --- | --- |
 | `case_created` | first tool | case_id, jurisdiction, schema, `case_json_sha256`, `registry_sha256: null` |
 | `run_started` | every tool | tool, version, `run_dir` (relative), frontend, role, evidence_ids |
-| `evidence_registered` | intake tool | evidence_ids (all of this run), added (new ones), registry_items, `registry_sha256` |
+| `evidence_registered` | intake tool only | evidence_ids (all of this run), added (new ones), registry_items, `registry_sha256` |
 | `run_finished` | every tool, also after a cancel or a failure | status `completed`/`cancelled`/`failed`, `audit_head`, `audit_entries`, timestamp_status, totals, verification {registered, added, verified, mismatched, unregistered} |
 
 Run audit (`audit.jsonl`) events added by the case folder: `case_linked` (entry #2, right after `run_started`),
