@@ -506,26 +506,30 @@ fn p12_kdf_sha256(
             .collect(),
     );
     bmp_pw.extend([0, 0]);
-    let fill = |src: &[u8]| -> Vec<u8> {
-        if src.is_empty() {
-            return vec![];
+    // I = S || P, built in one zeroized buffer (no un-wiped temporaries holding the password).
+    let fill = |out: &mut Vec<u8>, src: &[u8]| {
+        if !src.is_empty() {
+            let len = V * src.len().div_ceil(V);
+            out.extend((0..len).map(|i| src[i % src.len()]));
         }
-        let len = V * src.len().div_ceil(V);
-        (0..len).map(|i| src[i % src.len()]).collect()
     };
     let d = vec![id; V];
-    let mut i_buf = Zeroizing::new([fill(salt), fill(&bmp_pw)].concat());
+    let mut i_buf = Zeroizing::new(Vec::with_capacity(
+        V * (salt.len() + bmp_pw.len()).div_ceil(V) + 2 * V,
+    ));
+    fill(&mut i_buf, salt);
+    fill(&mut i_buf, &bmp_pw);
     let c = n.div_ceil(U);
     let mut out = Zeroizing::new(Vec::with_capacity(c * U));
     for round in 0..c {
         let mut h = openssl::sha::Sha256::new();
         h.update(&d);
         h.update(&i_buf);
-        let mut a = h.finish();
+        let mut a = Zeroizing::new(h.finish());
         for _ in 1..iterations {
-            a = openssl::sha::sha256(&a);
+            *a = openssl::sha::sha256(&a[..]);
         }
-        out.extend_from_slice(&a);
+        out.extend_from_slice(&a[..]);
         if round + 1 < c {
             let b: Vec<u8> = (0..V).map(|k| a[k % U]).collect();
             for chunk in i_buf.chunks_mut(V) {
