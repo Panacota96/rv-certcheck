@@ -1,15 +1,11 @@
-<!--
-  Template note for the docs agent of a tool scaffolded from rv-certcheck: steps 1–5 and 7–11 are shared (release
-  assets, verification, installer, offline use, build from source, uninstall). Rewrite the parts between
-  forge:domain markers: native libraries the tool needs, and the expected result of the sample run.
--->
-
 # Installation and verification (Windows 10/11)
 
 RV CertCheck runs **locally** on the examiner's Windows 10 or 11 PC (x64). It needs no administrator rights, no
-runtime (static C runtime) and no network, except for the optional RFC 3161 timestamp. This page covers: getting a
-release, **proving it is the genuine build**, installing it (portable zip or per-user installer), the first-run
-self-test, offline use, building from source for auditors, where files live, and uninstalling.
+runtime (static C runtime, OpenSSL linked in) and no network, except for the optional RFC 3161 timestamp and the
+explicit `--online` revocation option. This page covers: getting a release, **checking that it is the build
+Rakvor published** (checksums, provenance, Authenticode against the Rakvor root), SmartScreen, installing it
+(portable zip or per-user installer), PKCS#11 modules for hardware tokens, the first-run self-test, offline use,
+building from source for auditors (vendored OpenSSL), where files live, and uninstalling.
 
 Why verification matters: a court may ask how you know the program you ran is the one whose source an expert
 reviewed. Steps 2–4 and 6 produce that answer; keep their output with the case file
@@ -40,7 +36,8 @@ flowchart TB
 | Disk | The two executables and the docs (a few MB); outputs need about 11 report files per item for one language (19 with `--lang all`) plus the logs. |
 | Memory | Files are streamed in 1 MiB chunks: memory use does not grow with file size. |
 | Graphics | None required: the GUI also runs on VMs without a GPU driver (software rendering). |
-| Network | None, except the optional timestamp request (see [step 7](#7-offline-and-air-gapped-use)). |
+| Network | None, except the optional timestamp request and `analyze --online` (see [step 7](#7-offline-and-air-gapped-use)). |
+| Hardware token (optional) | A PKCS#11 module for the token: YubiKey 5 with the Yubico PIV Tool (`libykcs11.dll`), an HSM vendor module, or SoftHSM2 for tests (see [5d](#5d-pkcs11-modules-hardware-tokens)). |
 
 ## 1. Download
 
@@ -114,6 +111,45 @@ Get-AuthenticodeSignature .\rv-certcheck.exe, .\rv-certcheck-gui.exe | Format-Ta
 
 With the Windows SDK, `signtool verify /pa /v rv-certcheck.exe` shows the full chain.
 
+### 4b. Check that the signer chains to the Rakvor root
+
+Releases are signed with Rakvor's **internal** code-signing certificate, which chains to
+`packaging/signing/rakvor-code-signing-root.cer` (`CN=Rakvor Internal Code Signing Root CA, O=Rakvor`, SHA-256
+fingerprint `dc9ba1a2fcd4f0633c5214b7cceb25bed8f3f7d9ebaf111590250cbcaa83df60`). The release workflow imports that
+root and runs `signtool verify /pa /tw` on every signed file before publishing. To check on your machine, without
+installing the root:
+
+```powershell
+$sig  = Get-AuthenticodeSignature .\rv-certcheck.exe
+$root = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 C:\Rakvor\rakvor-code-signing-root.cer
+$chain = New-Object System.Security.Cryptography.X509Certificates.X509Chain
+$chain.ChainPolicy.RevocationMode = 'NoCheck'
+$chain.ChainPolicy.VerificationFlags = 'AllowUnknownCertificateAuthority'
+$chain.ChainPolicy.ExtraStore.Add($root) | Out-Null
+$chain.Build($sig.SignerCertificate) | Out-Null
+$top = $chain.ChainElements[$chain.ChainElements.Count - 1].Certificate
+$top.GetCertHashString('SHA256')   # must print DC9BA1A2FCD4F0633C5214B7CCEB25BED8F3F7D9EBAF111590250CBCAA83DF60
+```
+
+(Use the copy of the root from the source tree or from a Rakvor machine, not one shipped next to the download.)
+The same check with this tool: export the signer chain (`certutil -dump`, or the *Digital Signatures* tab →
+*View Certificate* → *Copy to File*), then
+`rv-certcheck analyze -i signer.cer -i intermediate.cer --anchor rakvor --purpose code-signing --at <signing date>`
+should report `CERT_CHAIN_VALID` and `CERT_ISSUED_BY_RAKVOR_INTERNAL`. Authenticode signatures themselves are
+verified by the tool only from v0.2.
+
+**This is an internal root.** Windows does not trust it unless it was installed on the machine (Group Policy or
+`Import-Certificate -CertStoreLocation Cert:\LocalMachine\Root`, see [company-pki.md](company-pki.md)); on other
+machines `Get-AuthenticodeSignature` reports `UnknownError` / untrusted root even though the file is intact. Rely on
+the fingerprint check above.
+
+### 4c. SmartScreen
+
+SmartScreen judges a download by the reputation of its signer with Microsoft, which an internal certificate does
+not have. On a machine without the Rakvor root, or for a new release, Windows shows *"Windows protected your PC"*.
+Only after steps 2–4b pass: *More info → Run anyway*, or `Unblock-File` on the zip before extracting it (step 5a).
+Never bypass the warning for a file that failed any check.
+
 ## 5. Install
 
 ### 5a. Portable zip
@@ -149,9 +185,48 @@ tree).
 <!-- forge:domain -->
 ### 5c. Native libraries
 
-None. RV CertCheck is two self-contained executables: hashing, the PDF writer, the RFC 3161 client and the CMS
-signer are compiled in (pure Rust crates, listed in the SBOM), and the C runtime is linked statically
-(`.cargo/config.toml`). There is no DLL to verify or to keep next to the executables.
+None to install. **OpenSSL 3** is compiled from source during the build (`openssl` crate with the `vendored`
+feature, `openssl-src`) and linked statically into both executables; no system OpenSSL or DLL is used, and its
+version is recorded in every run (`environment.json`, `chain.json`). Hashing, the PDF writer, the RFC 3161 client
+and the CMS signer of the reports are Rust crates (listed in the SBOM); the C runtime is linked statically
+(`.cargo/config.toml`).
+
+### 5d. PKCS#11 modules (hardware tokens)
+
+Only the creation commands that use a token (`tokens list`, `pki init-root`/`issue`/`import`, `csr new` with
+`--pkcs11-module`) load a PKCS#11 module, at run time, from the path you give. Nothing is installed by RV
+CertCheck; the module comes from the token vendor.
+
+| Token | Module | Notes |
+| --- | --- | --- |
+| YubiKey 5 (PIV) | Yubico PIV Tool: `C:\Program Files\Yubico\Yubico PIV Tool\bin\libykcs11.dll` (Linux: `libykcs11.so`) | Change the PIN, PUK and management key from the factory values before use. Real YubiKey use is a manual check: it is not exercised in CI |
+| HSM | The vendor's PKCS#11 library | Follow the vendor's backup procedure for root keys |
+| SoftHSM2 (tests only) | `/usr/lib/softhsm/libsofthsm2.so` (Debian/Ubuntu `apt install softhsm2`), `softhsm2.dll` on Windows | Software token; never for real keys |
+
+Check the module and note the token serial:
+
+```powershell
+rv-certcheck tokens list --pkcs11-module "C:\Program Files\Yubico\Yubico PIV Tool\bin\libykcs11.dll"
+```
+
+SoftHSM2 for the token tests:
+
+```bash
+sudo apt install softhsm2
+softhsm2-util --init-token --free --label rv-test --so-pin 0000 --pin 1234
+softhsm2-util --show-slots            # note the token serial
+export RV_TEST_PKCS11_MODULE=/usr/lib/softhsm/libsofthsm2.so RV_TEST_PKCS11_SERIAL=<serial> RV_TEST_PKCS11_PIN=1234
+cargo test -p rv-certcheck-certs --test acceptance_creation --test create_lab_tokens
+```
+
+Without those three variables the token tests print a skip message; the CI workflow of this commit does not set
+them.
+
+### 5e. Key ceremony
+
+A root CA key is created on a token only with `--confirm-root` (the refusal message points here). The ceremony
+checklist (two people, offline machine, two tokens, sealed PINs, minutes, backup) is in
+[company-pki.md](company-pki.md#key-ceremony-checklist).
 <!-- /forge:domain -->
 
 ## 6. First-run self-test and sample
@@ -162,8 +237,8 @@ rv-certcheck self-test
 ```
 
 `self-test` prints `PASS` for md5, sha1, sha256, sha512, sha3-256 and blake3 (known answers for `"abc"`), exit code
-0. It tests the hash implementations only. Then run the synthetic sample, which exercises type detection,
-duplicates, reports and the audit chain:
+0. It tests the hash implementations only. Then run the lab sample, which exercises recognition, chain validation,
+revocation, timestamp tokens, key matching, reports and the audit chain:
 
 ```powershell
 # portable zip (script included): self-test, sample analyze, verify-log, hashes.csv vs expected_hashes.csv
@@ -172,26 +247,24 @@ duplicates, reports and the audit chain:
 # installer (no script installed): run it by hand into a temporary folder
 $app = "$env:LOCALAPPDATA\Programs\Rakvor\RV CertCheck"
 $out = Join-Path $env:TEMP "rv-certcheck-check"
-rv-certcheck analyze -i "$app\examples\sample\evidence" --hash sha256,md5 --out $out --progress none --no-timestamp
-$LASTEXITCODE                                  # 0
+rv-certcheck analyze -i "$app\examples\sample\evidence" --anchor "$app\examples\sample\anchors\rakvor-lab-root.crt" `
+  --at 2026-06-01T00:00:00Z --hash sha256,md5 --out $out --progress none --no-timestamp
+$LASTEXITCODE                                  # 3 (high findings expected: expired, revoked, wrong root, key mismatch)
 rv-certcheck verify-log (Get-ChildItem "$out\logs" | Select-Object -Last 1).FullName   # OK … chain intact
 ```
 
 <!-- forge:domain -->
-Expected summary: **3 items, 0 errors, findings high 0, medium 1, low 0, info 2**, exit code 0 (one
-`EXTENSION_MISMATCH` for `foto-vacaciones.jpg`, one `DUPLICATE` pair `acta.txt` / `acta-copia.txt`). The SHA-256
-column of `hashes.csv` must equal `examples\sample\expected_hashes.csv` (computed independently with Python):
+Expected summary: **13 items, 0 errors, findings high 4, medium 4, low 0, info 9**, exit code **3**. By code:
+`CERT_CHAIN_VALID` 7, `REVOCATION_UNKNOWN` 2, and one each of `CERT_CHAIN_UNTRUSTED`, `CERT_EXPIRED_AT_DATE`,
+`CERT_REVOKED`, `KEY_DOES_NOT_MATCH`, `CERT_WEAK_KEY`, `CERT_WEAK_SIGNATURE_ALGORITHM`, `TIMESTAMP_TOKEN_VALID` and
+`CRYPTO_INPUT_NOT_RECOGNISED` (statistics report, *findings by code*). The per-file expectations are in
+[examples/README.md](../examples/README.md) and `examples/sample/expected_findings.json`; the SHA-256 and MD5 of the
+13 files are in `examples/sample/expected_hashes.csv` (computed independently with Python).
 
-| File | Size | SHA-256 |
-| --- | --: | --- |
-| `acta-copia.txt` | 61 | `80e089ad6704c831e386b430adf92c5f5b72ec4428566d3580660e103c183c3c` |
-| `acta.txt` | 61 | `80e089ad6704c831e386b430adf92c5f5b72ec4428566d3580660e103c183c3c` |
-| `foto-vacaciones.jpg` | 112 | `42503ebb0f9892b30b72e11cfa0cbf5bcb5d60f667d611fa9598c9b4e835c643` |
-
-`run.ps1` / `run.sh` make this comparison themselves: they read the tool's `logs\<RUN-ID>\hashes.csv` and compare
+`run.ps1` / `run.sh` accept exit 0 or 3 from `analyze`, then read the tool's `logs\<RUN-ID>\hashes.csv` and compare
 size, SHA-256 and MD5 of every file with `expected_hashes.csv`, print
-`hashes.csv matches expected_hashes.csv (3 files: size, SHA-256, MD5)` and exit 3 on any difference. For the
-installer (no script installed), compare the table above with `$out\logs\<RUN-ID>\hashes.csv`, or run
+`hashes.csv matches expected_hashes.csv (13 files: size, SHA-256, MD5)` and exit 3 on any difference. For the
+installer (no script installed), compare `expected_hashes.csv` with `$out\logs\<RUN-ID>\hashes.csv`, or run
 `python tests\verify_chain.py <log folder>` from the source tree, which re-hashes every file of `hashes.csv`.
 <!-- /forge:domain -->
 
@@ -199,8 +272,12 @@ Keep the console output and the run folder as the record of this verification.
 
 ## 7. Offline and air-gapped use
 
-The **only** network access in the code is the RFC 3161 timestamp request (one HTTP POST of a 32-byte hash to the
-TSA, [src/core/src/trust.rs](../src/core/src/trust.rs)). There is no telemetry, update check or licence check.
+Network access in the code is limited to: the RFC 3161 timestamp request for the audit log (one HTTP POST of a
+32-byte hash to the TSA, [src/core/src/trust.rs](../src/core/src/trust.rs)), and, **only with `analyze --online`**,
+GET requests to the CRL distribution points and POST requests to the OCSP responders named in the certificates
+examined ([src/certs/src/analysis/online.rs](../src/certs/src/analysis/online.rs); each URL, time and response
+SHA-256 is audited). `trust-list import` reads a local file only. There is no telemetry, update check or licence
+check.
 
 | To disable the timestamp | How |
 | --- | --- |
@@ -223,7 +300,9 @@ restriction is not enforced by the OS; on a connected workstation, a Windows Fir
 | --- | --- |
 | Rust | Pinned by [rust-toolchain.toml](../rust-toolchain.toml): **1.97.0** with rustfmt and clippy; `rustup` installs and selects it automatically inside the source tree. `Cargo.toml` declares `rust-version = "1.85"` (edition 2024) as the minimum. To match a release exactly, use the compiler recorded in that release's `environment.json` → `tool.rustc` (e.g. `rustc 1.97.0 (2d8144b78 2026-07-07)`). |
 | Windows linker | Visual Studio 2022 Build Tools, workload *Desktop development with C++* (MSVC + Windows SDK); target `x86_64-pc-windows-msvc`. Static CRT is set in `.cargo/config.toml`. |
-| Linux | No system packages needed to build the CLI. |
+| OpenSSL (vendored) | Built from source by `openssl-src` during `cargo build`: needs a C compiler (MSVC on Windows, with its `nmake`; `make` elsewhere) and **Perl**. **Windows: Strawberry Perl** (`choco install strawberryperl`; Git Bash's perl cannot configure OpenSSL for MSVC). If several perls are on PATH, point the build at Strawberry: `$env:OPENSSL_SRC_PERL = "C:\Strawberry\perl\bin\perl.exe"` (what CI does). NASM is not needed (`no-asm` build without it). |
+| Linux | `gcc` (or `clang`), `make` and `perl` for the vendored OpenSSL; nothing else to build the CLI. |
+| Optional | The `openssl` command line for the OpenSSL oracle tests (mandatory in CI); Python `cryptography` (installed with `pyhanko`) for the second oracle. |
 | Optional | Python 3.12 with `blake3 jsonschema pyhanko` for the independent verifiers and the trust tests (`RV_TEST_PYTHON=python`). |
 
 ### Build
@@ -294,7 +373,9 @@ The same script compares this build with the Python profile of the tool (measure
 | Case folder | wherever you create it with `--case-dir` (`case.json`, `case-log.jsonl`, `evidence\`, `runs\`) |
 | GUI settings | not persisted: each start uses the defaults; every change made before a run is recorded in that run's audit log (`ui_*`) |
 | Signing certificate | wherever you keep it; only its path, subject and SHA-256 fingerprint are logged, never the password |
-| Local data, caches, temporary files | none |
+| Trust-list snapshots | `%LOCALAPPDATA%\Rakvor\rv-certcheck\trust-lists\<eu|co>\<id>.json` (+ `.sha256`); `RV_CERTCHECK_DATA` overrides the base folder |
+| CA folders, key files, lab sets | wherever you create them (`--ca`, `--key-file`, `--lab-out`); key files owner-only |
+| Temporary files | the CRLs given to OpenSSL during a chain check, written as PEM to the system temp folder and deleted after the call |
 
 ## 10. Uninstall
 
@@ -321,4 +402,7 @@ The same script compares this build with the Python profile of the tool (measure
 | `self-test` prints `FAIL` | Do not use this build for evidence; re-download and repeat steps 2–4. |
 | Sample summary differs from step 6 | Wrong version or modified sample files; compare `environment.json` with the release notes and the sample digests with `expected_hashes.csv`. |
 | GUI window blank or very slow on a VM | No GPU driver: software rendering is used; give the VM more CPU. |
+| Build fails in `openssl-sys` / `openssl-src` on Windows (OpenSSL configure step cannot run Perl) | Install Strawberry Perl and set `OPENSSL_SRC_PERL` (step 8). |
+| `--anchor system` refused on Windows | Not available on Windows in v0.1: export the root and use `--anchor FILE`. |
+| `tokens list` fails to load the module | Wrong path or a 32-bit module: use the 64-bit `libykcs11.dll` of the Yubico PIV Tool. |
 | Building from source downloads another compiler | Expected: rustup installs the pinned 1.97.0 from `rust-toolchain.toml`. Offline, install it beforehand (`rustup toolchain install 1.97.0 --profile minimal`). |
