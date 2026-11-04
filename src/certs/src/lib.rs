@@ -202,7 +202,7 @@ pub mod trust_list {
         crate::trustlist::eu::import_eu(xml, source, fetched_utc, store_dir)
     }
 
-    /// Imports the curated Colombian CSV (format in docs/trust-lists.md: ecd_name, service_name, service_type,
+    /// Imports the curated Colombian CSV (format in docs/theory.md B14: ecd_name, service_name, service_type,
     /// status, status_from, status_until, certificate_pem_or_b64, source_url, checked_utc) into `store_dir`.
     pub fn import_co_csv(
         csv: &[u8],
@@ -261,7 +261,39 @@ pub mod pki {
         crate::create::pki::import_ca(req)
     }
 
-    /// Reads `ca.json` and verifies the `issued.jsonl` chain (a broken chain is an error: nothing is issued).
+    /// [`import_ca`] with the issuer's certificate (`--issuer-cert`): it must have issued the imported one; its
+    /// SHA-256 becomes `parent_certificate_sha256`.
+    pub fn import_ca_with_issuer(
+        req: &ImportCaRequest,
+        issuer_certificate: Option<&[u8]>,
+    ) -> CertResult<CaFolder> {
+        crate::create::pki::import_ca_with_issuer(req, issuer_certificate)
+    }
+
+    /// `pki set --crl-url`: the recorded way to change ca.json (None / empty clears the URL).
+    pub fn set_crl_url(
+        ca_dir: &Path,
+        url: Option<&str>,
+        actor: &str,
+    ) -> CertResult<(CaFolder, IssuedRecord)> {
+        crate::create::pki::set_crl_url(ca_dir, url, actor)
+    }
+
+    /// [`issue`] with options (e.g. a non-RSA examiner key, refused by default).
+    pub fn issue_with(req: &IssueRequest, opts: &IssueOptions) -> CertResult<IssueResult> {
+        crate::create::pki::issue_with(req, opts)
+    }
+
+    /// Default key type per profile when `key_spec` is None.
+    pub fn default_key_spec(profile: IssueProfile) -> KeySpec {
+        crate::create::pki::default_key_spec(profile)
+    }
+
+    /// Default key type of `init-root` (RSA-4096).
+    pub const ROOT_DEFAULT_KEY_SPEC: KeySpec = crate::create::pki::ROOT_DEFAULT_KEY_SPEC;
+
+    /// Reads `ca.json` and verifies the `issued.jsonl` chain and every recorded file, ca.json and
+    /// crl/latest.crl included (any change outside the tool is an ErrorKind::Policy error: nothing is issued).
     pub fn open(ca_dir: &Path) -> CertResult<CaFolder> {
         // OWNER: B
         crate::create::pki::open(ca_dir)

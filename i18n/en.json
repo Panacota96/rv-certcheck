@@ -563,6 +563,7 @@
     "err_tls_san": "tls-server needs at least one dns: or ip: SAN.",
     "err_ca_secret": "Type the CA key password or PIN.",
     "err_examiner_file_key": "The examiner profile needs a new key in a file (the .p12 carries it).",
+    "err_examiner_rsa": "The examiner profile needs an RSA key (rsa-3072 or rsa-4096): rv-hashinv signs PDF reports with RSA keys only, so an EC or Ed25519 examiner certificate could not sign reports.",
     "err_p12_password": "Type the .p12 password (twice).",
     "err_open_ca_first": "Open a CA folder first (left).",
     "err_serial": "Pick the certificate to revoke.",

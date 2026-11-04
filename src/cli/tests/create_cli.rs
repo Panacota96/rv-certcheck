@@ -113,6 +113,7 @@ fn creation_help_documents_every_option() {
         vec!["pki", "crl"],
         vec!["pki", "ocsp-sign"],
         vec!["pki", "show"],
+        vec!["pki", "set"],
         vec!["pki", "verify"],
         vec!["csr", "new"],
         vec!["csr", "show"],
@@ -820,4 +821,157 @@ fn company_pki_flow_token_root() {
     }
     every_run_log_verifies(dir);
     no_secret_anywhere(dir, &[&pin, ISSUING_PW, LEAF_PW, P12_PW]);
+}
+
+fn key_of(cert_path: &str) -> (String, Option<u32>, Option<String>) {
+    let p = rv_certcheck_core::certs::parse_any(&std::fs::read(cert_path).unwrap(), None).unwrap();
+    let k = &p.certificates[0].key;
+    (k.algorithm.clone(), k.bits, k.curve.clone())
+}
+
+fn small_root(dir: &Path) {
+    ok_json(
+        bin(dir)
+            .env("RV_KEY_PASSWORD", ROOT_PW)
+            .args(["pki", "init-root", "--ca", "root", "--ca-id", "root-test"])
+            .args([
+                "--subject",
+                "O=Rakvor,CN=Integrity Root (test)",
+                "--key-type",
+                "p-256",
+            ]),
+    );
+}
+
+fn verify_code(dir: &Path) -> Option<i32> {
+    bin(dir)
+        .args(["pki", "verify", "--ca", "root"])
+        .output()
+        .unwrap()
+        .status
+        .code()
+}
+
+#[test]
+fn ca_folder_tampering_exits_3_and_pki_set_keeps_it_verified() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path();
+    small_root(dir);
+    ok_json(
+        bin(dir)
+            .env("RV_CA_PASSWORD", ROOT_PW)
+            .args(["pki", "crl", "--ca", "root"]),
+    );
+    assert_eq!(verify_code(dir), Some(0));
+    // pki set: the recorded change verifies.
+    let r = ok_json(bin(dir).args([
+        "pki",
+        "set",
+        "--ca",
+        "root",
+        "--crl-url",
+        "http://pki.rakvor.test/root.crl",
+    ]));
+    assert_eq!(r["ca"]["crl_url"], "http://pki.rakvor.test/root.crl");
+    assert_eq!(verify_code(dir), Some(0));
+    // ca.json edited by hand: verify and every operation exit 3.
+    let ca_json = dir.join("root/ca.json");
+    let good = std::fs::read_to_string(&ca_json).unwrap();
+    std::fs::write(
+        &ca_json,
+        good.replace("http://pki.rakvor.test/root.crl", "http://evil.test/x.crl"),
+    )
+    .unwrap();
+    assert_eq!(verify_code(dir), Some(3));
+    let o = bin(dir)
+        .env("RV_CA_PASSWORD", ROOT_PW)
+        .env("RV_KEY_PASSWORD", LEAF_PW)
+        .args(["pki", "issue", "--ca", "root", "--profile", "tsa"])
+        .args([
+            "--subject",
+            "O=Rakvor,CN=TSA (test)",
+            "--key-file",
+            "tsa.key.p8",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(3),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert!(String::from_utf8_lossy(&o.stderr).contains("ca.json"));
+    std::fs::write(&ca_json, &good).unwrap();
+    assert_eq!(verify_code(dir), Some(0));
+    // crl/latest.crl altered: exit 3.
+    let latest = dir.join("root/crl/latest.crl");
+    let mut b = std::fs::read(&latest).unwrap();
+    let n = b.len() - 2;
+    b[n] ^= 0x01;
+    std::fs::write(&latest, b).unwrap();
+    assert_eq!(verify_code(dir), Some(3));
+}
+
+#[test]
+fn key_type_defaults_per_profile_and_examiner_must_be_rsa() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path();
+    small_root(dir);
+    let issue = |profile: &str, cn: &str, extra: &[&str]| {
+        bin(dir)
+            .env("RV_CA_PASSWORD", ROOT_PW)
+            .env("RV_KEY_PASSWORD", LEAF_PW)
+            .env("RV_P12_PASSWORD", P12_PW)
+            .args(["pki", "issue", "--ca", "root", "--profile", profile])
+            .args(["--subject", &format!("O=Rakvor,CN={cn}")])
+            .args(["--key-file", &format!("{cn}.key.p8")])
+            .args(extra)
+            .arg("--json")
+            .output()
+            .unwrap()
+    };
+    let cert = |o: &std::process::Output| -> String {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let v: Value = serde_json::from_slice(&o.stdout).unwrap();
+        dir.join(v["cert_path"].as_str().unwrap())
+            .display()
+            .to_string()
+    };
+    // Defaults: P-256 tsa, P-384 intermediate, RSA-3072 examiner.
+    let (alg, _, curve) = key_of(&cert(&issue("tsa", "tsa", &[])));
+    assert!(alg.contains("EC") || alg.contains("ec"), "{alg}");
+    assert!(curve.unwrap_or_default().contains("256"));
+    let (_, _, curve) = key_of(&cert(&issue("intermediate", "int", &[])));
+    assert!(curve.unwrap_or_default().contains("384"));
+    let (alg, bits, _) = key_of(&cert(&issue("examiner", "exam", &[])));
+    assert_eq!(
+        (alg.to_ascii_lowercase().contains("rsa"), bits),
+        (true, Some(3072))
+    );
+    // EC examiner: refused (exit 3, nothing created) unless explicitly allowed.
+    let o = issue("examiner", "exam-ec", &["--key-type", "p-256"]);
+    assert_eq!(o.status.code(), Some(3));
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        err.contains("RSA") && err.contains("--allow-non-rsa-examiner"),
+        "{err}"
+    );
+    assert!(!dir.join("exam-ec.key.p8").exists());
+    let o = issue(
+        "examiner",
+        "exam-ec2",
+        &["--key-type", "p-256", "--allow-non-rsa-examiner"],
+    );
+    cert(&o);
+    // The help shows the per-profile defaults.
+    let o = bin(dir).args(["pki", "issue", "--help"]).output().unwrap();
+    let h = String::from_utf8_lossy(&o.stdout)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        h.contains("p-384 intermediate") && h.contains("rsa-3072 code-signing, examiner"),
+        "{h}"
+    );
 }

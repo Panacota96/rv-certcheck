@@ -295,7 +295,7 @@ impl Default for RootForm {
             ca_dir: String::new(),
             ca_id: String::new(),
             subject: String::new(),
-            key_type: KeySpec::Rsa4096,
+            key_type: rv_certcheck_core::certs::pki::ROOT_DEFAULT_KEY_SPEC,
             validity_days: "7300".into(),
             key: KeyForm::default(),
             confirm_root: false,
@@ -337,7 +337,7 @@ impl Default for IssueForm {
             sans: String::new(),
             use_csr: false,
             csr_file: String::new(),
-            key_type: KeySpec::Rsa3072,
+            key_type: rv_certcheck_core::certs::pki::default_key_spec(IssueProfile::Examiner),
             validity_days: "825".into(),
             key: KeyForm::default(),
             ca_secret: MaskedField::default(),
@@ -1143,6 +1143,9 @@ impl CreateState {
         }
         if self.issue.profile != p {
             self.issue.profile = p;
+            // The library's per-profile key default (p-384 intermediate; p-256 tsa / tls-server; rsa-3072
+            // code-signing / examiner); the examiner must stay RSA for rv-hashinv's PDF signatures.
+            self.issue.key_type = rv_certcheck_core::certs::pki::default_key_spec(p);
             if p == IssueProfile::Examiner {
                 // The examiner .p12 carries a new file key.
                 self.issue.key.mode = KeyMode::File;
@@ -1317,6 +1320,9 @@ impl CreateState {
                 if f.profile == IssueProfile::Examiner {
                     if f.key.mode != KeyMode::File {
                         return Err(c.ui("err_examiner_file_key"));
+                    }
+                    if !use_csr && !f.key_type.is_rsa() {
+                        return Err(c.ui("err_examiner_rsa"));
                     }
                     if f.p12_password.is_empty() {
                         return Err(c.ui("err_p12_password"));

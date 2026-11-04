@@ -374,8 +374,11 @@ Commands:
   crl        Sign a CRL with every revoked serial
   ocsp-sign  Sign an OCSP response for a serial at a given time (lab use; there is no OCSP server)
   show       Show a CA folder: ca.json and every certificate issued, with its revocation state
-  verify     Verify a CA folder: the issued.jsonl hash chain, certs/ca.crt and the SHA-256 of every
-             recorded file
+  set        Change ca.json the recorded way (never edit it by hand: an edit outside the tool fails
+             every operation and `pki verify`). Sets or clears the CRL distribution point of future
+             certificates
+  verify     Verify a CA folder: the issued.jsonl hash chain, certs/ca.crt, ca.json, crl/latest.crl
+             and the SHA-256 of every recorded file
   help       Print this message or the help of the given subcommand(s)
 
 Options:
@@ -453,7 +456,7 @@ Options:
 
       --key-type <TYPE>
           Key type: rsa-2048, rsa-3072, rsa-4096, p-256, p-384, ed25519.
-          Default: rsa-4096
+          Default: rsa-4096 (the library's root default)
           Example: --key-type p-384
 
       --key-file <FILE>
@@ -566,6 +569,15 @@ Options:
           The CA certificate (PEM or DER).
           Default: none (required)
           Example: --cert packaging/signing/rakvor-code-signing-root.cer
+
+      --issuer-cert <FILE>
+          The certificate of the CA that issued --cert (PEM or DER), for an intermediate. It must
+          have issued
+          --cert (name and signature); its SHA-256 is recorded as the parent in ca.json. The
+          issuer's
+          subject and key id are recorded from --cert in any case.
+          Default: none (parent certificate SHA-256 not recorded)
+          Example: --issuer-cert E:\rakvor-pki\root-2026\certs\ca.crt
 
       --key-file <FILE>
           Encrypted key file (PKCS#8, created owner-only, never overwritten).
@@ -681,9 +693,20 @@ Options:
           Example: --csr requests/hub.csr
 
       --key-type <TYPE>
-          Key type of the new key (ignored with --csr).
-          Default: rsa-3072
+          Key type of the new key (ignored with --csr): rsa-2048, rsa-3072, rsa-4096, p-256, p-384,
+          ed25519.
+          The examiner profile needs RSA (rv-hashinv signs PDF reports with RSA keys only): an EC or
+          Ed25519 examiner key is refused unless --allow-non-rsa-examiner is given.
+          Default: per profile: p-384 intermediate; p-256 tsa, tls-server; rsa-3072 code-signing,
+          examiner
           Example: --key-type p-256
+
+      --allow-non-rsa-examiner
+          Issue an examiner certificate with an EC or Ed25519 key anyway. Such a certificate cannot
+          sign
+          rv-hashinv PDF reports (RSA only).
+          Default: off (a non-RSA examiner key is refused, exit 3)
+          Example: --allow-non-rsa-examiner
 
       --key-file <FILE>
           Encrypted key file (PKCS#8, created owner-only, never overwritten).
@@ -1049,10 +1072,70 @@ FILES WRITTEN (every command):
   file.
 ```
 
+### rv-certcheck pki set
+
+```text
+Change ca.json the recorded way (never edit it by hand: an edit outside the tool fails every
+operation and `pki verify`). Sets or clears the CRL distribution point of future certificates
+
+Usage: rv-certcheck pki set [OPTIONS] --ca <DIR> --crl-url <URL>
+
+Options:
+      --ca <DIR>
+          CA folder.
+          Default: none (required)
+          Example: --ca E:\rakvor-pki\issuing-2026
+
+      --crl-url <URL>
+          CRL distribution point (http:// or https://) written into every certificate issued from
+          now on;
+          an empty value clears it. Certificates already issued keep the CDP they have.
+          Default: none (required)
+          Example: --crl-url http://pki.rakvor.example/issuing-2026.crl
+
+      --out <DIR>
+          Folder for the run's audit log and report: <OUT>/logs/<RUN-ID>/ and
+          <OUT>/reports/<RUN-ID>/.
+          Default: rakvor-out
+          Example: --out D:\pki-runs
+
+      --json
+          Print the result as JSON on stdout instead of a summary.
+          Default: off (human-readable summary)
+          Example: --json
+
+      --actor <NAME>
+          Name written in the audit log and in issued.jsonl.
+          Default: the operating-system user name
+          Example: --actor "Ana Ruiz"
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+EXIT CODES:
+  0  Done.
+  1  Runtime error (file not readable, wrong password or PIN, token or crypto failure). Audited.
+  2  Usage error (bad option value, empty subject, unknown profile or reason).
+  3  Refused by a safety rule, or verification failed: root key on a token without --confirm-root,
+     client-internal profile (needs the CP/CPS, rv-certcheck#2), a file that would be overwritten, a
+     key that does not match its certificate, a CA folder whose issued.jsonl or files do not verify,
+     a key that does not match (keys match). Nothing is issued. Audited.
+
+FILES WRITTEN (every command):
+  <OUT>/logs/<RUN-ID>/audit.jsonl        Hash-chained log of the run (rv-certcheck verify-log checks
+  it).
+  <OUT>/logs/<RUN-ID>/audit.log          The same, human-readable.
+  <OUT>/logs/<RUN-ID>/environment.json   Tool version, OS, host, user, command line.
+  <OUT>/reports/<RUN-ID>/report.json|.txt  What was created or checked, with the SHA-256 of every
+  file.
+  <CA>/ca.json rewritten, a ca_json_written record (its SHA-256) in <CA>/issued.jsonl
+```
+
 ### rv-certcheck pki verify
 
 ```text
-Verify a CA folder: the issued.jsonl hash chain, certs/ca.crt and the SHA-256 of every recorded file
+Verify a CA folder: the issued.jsonl hash chain, certs/ca.crt, ca.json, crl/latest.crl and the
+SHA-256 of every recorded file
 
 Usage: rv-certcheck pki verify [OPTIONS] --ca <DIR>
 

@@ -36,8 +36,8 @@ pub const STALE_LOCK: Duration = Duration::from_secs(600);
 /// How long a tool waits for another tool's lock before giving up.
 pub const LOCK_WAIT: Duration = Duration::from_secs(30);
 
-/// What a tool does with the case registry. The reference (rv-certcheck) is the intake tool; tools scaffolded
-/// from it are analysis tools (`CASE_ROLE` in lib.rs and `case_role` in .forge.json).
+/// What a tool does with the case registry. rv-hashinv is the suite's intake tool; rv-certcheck, like every
+/// other tool, is an analysis tool (`CASE_ROLE` in lib.rs and `case_role` in .forge.json).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CaseRole {

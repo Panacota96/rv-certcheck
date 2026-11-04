@@ -36,7 +36,8 @@ use zeroize::Zeroizing;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorKind {
-    /// The operation is a stub (v0.1 freeze). Core turns it into `ANALYSIS_NOT_IMPLEMENTED` / CLI exit 1.
+    /// Unused since v0.1 has no stubs left (kept so the frozen enum does not change). Core would turn it into
+    /// `ANALYSIS_NOT_IMPLEMENTED` / CLI exit 1.
     NotImplemented,
     /// The bytes are not the structure they claim to be (bad DER/PEM, truncated, wrong tag).
     Parse,
@@ -204,7 +205,7 @@ pub mod codes {
     pub const CRYPTO_INPUT_NOT_RECOGNISED: &str = "CRYPTO_INPUT_NOT_RECOGNISED";
     /// medium [kind, error]
     pub const CRYPTO_INPUT_UNPARSABLE: &str = "CRYPTO_INPUT_UNPARSABLE";
-    /// info [operation]
+    /// info [operation]. Unused in v0.1 (no stub is left); kept in the catalogue for older reports.
     pub const ANALYSIS_NOT_IMPLEMENTED: &str = "ANALYSIS_NOT_IMPLEMENTED";
     /// high [algorithm, expected, actual]
     pub const EVIDENCE_CHANGED_DURING_READ: &str = "EVIDENCE_CHANGED_DURING_READ";
@@ -709,7 +710,8 @@ pub enum AnchorSpec {
     File { path: PathBuf },
     /// The bundled Rakvor root ([`crate::RAKVOR_ROOT_DER`]).
     Rakvor,
-    /// The operating system's store (Windows ROOT store; OpenSSL default paths elsewhere).
+    /// The operating system's CA bundle on Unix (SSL_CERT_FILE / SSL_CERT_DIR or the usual distribution paths).
+    /// Refused on Windows in v0.1 (the ROOT store is not read): export the root and use `--anchor FILE`.
     System,
     /// A stored trust-list snapshot (`tl:eu@<id>`, `tl:co@<id>`; `latest` picks the newest).
     TrustList {
@@ -1183,6 +1185,9 @@ impl KeySpec {
             KeySpec::Ed25519 => "ed25519",
         }
     }
+    pub fn is_rsa(&self) -> bool {
+        matches!(self, KeySpec::Rsa2048 | KeySpec::Rsa3072 | KeySpec::Rsa4096)
+    }
     pub fn parse(s: &str) -> CertResult<KeySpec> {
         let t = s.trim().to_ascii_lowercase();
         KeySpec::ALL
@@ -1202,7 +1207,7 @@ impl KeySpec {
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum KeyLocation {
     /// An encrypted file. `path` is relative to the CA folder when inside it (`keys/ca.key.p8`), else absolute.
-    /// `format`: `pkcs8-encrypted` (PEM, AES-256-CBC + PBKDF2/scrypt) or `pkcs12`.
+    /// `format`: `pkcs8-encrypted` (PEM, AES-256-CBC + PBKDF2) or `pkcs12`.
     EncryptedFile { path: String, format: String },
     /// A key on a PKCS#11 token. The PIN is never stored.
     Pkcs11 {
@@ -1271,9 +1276,16 @@ pub struct CaFolder {
     pub not_after: String,
     pub key_spec: Option<KeySpec>,
     pub key: KeyLocation,
-    /// Parent CA's ca_id and certificate SHA-256 (None for a root).
+    /// Parent CA's ca_id and certificate SHA-256 (None for a root). An imported intermediate has no ca_id for
+    /// its parent; `parent_certificate_sha256` is set when `pki import --issuer-cert` supplied the issuer.
     pub parent: Option<String>,
     pub parent_certificate_sha256: Option<String>,
+    /// Issuer subject of a CA certificate that is not self-signed (imported intermediate). Added after the freeze.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_subject: Option<String>,
+    /// Issuer key id (the certificate's authorityKeyIdentifier keyIdentifier, hex). Added after the freeze.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_key_id_hex: Option<String>,
     /// Profiles this CA may issue.
     pub allowed_profiles: Vec<IssueProfile>,
     /// Next cRLNumber to use.
@@ -1286,7 +1298,8 @@ pub struct CaFolder {
     pub created_by: String,
     pub tool_version: String,
     /// CRL distribution point URL written into every certificate this CA issues (cRLDistributionPoints), when set.
-    /// Configured by editing ca.json (added by agent B; absent = no CDP).
+    /// Set with `pki set --crl-url` (recorded in issued.jsonl); editing ca.json by hand makes the folder fail
+    /// verification. Absent = no CDP.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crl_url: Option<String>,
 }
@@ -1306,7 +1319,7 @@ pub enum IssueProfile {
     Tsa,
     /// TLS server: digitalSignature(+keyEncipherment for RSA), EKU serverAuth, SAN required.
     TlsServer,
-    /// Client certificates with the "internal use" statement. DISABLED until the CP/CPS exists (v0.2).
+    /// Client certificates with the "internal use" statement. DISABLED until the CP/CPS exists (v0.2, rv-certcheck#2).
     ClientInternal,
 }
 
@@ -1329,7 +1342,7 @@ impl IssueProfile {
             IssueProfile::ClientInternal => "client-internal",
         }
     }
-    /// False for `client-internal` in v0.1 (needs the CP/CPS reviewed by the lawyer, rv-hub #4).
+    /// False for `client-internal` in v0.1 (needs the CP/CPS reviewed by the lawyer, rv-certcheck#2).
     pub fn enabled(&self) -> bool {
         !matches!(self, IssueProfile::ClientInternal)
     }
@@ -1375,7 +1388,7 @@ pub const REVOCATION_REASONS: [&str; 9] = [
 pub struct IssuedRecord {
     pub seq: u64,
     pub ts_utc: String,
-    /// `ca_created` | `ca_imported` | `issued` | `revoked` | `crl_issued` | `ocsp_signed`
+    /// `ca_created` | `ca_imported` | `ca_json_written` | `issued` | `revoked` | `crl_issued` | `ocsp_signed`
     pub action: String,
     pub ca_id: String,
     pub serial_hex: Option<String>,
@@ -1440,6 +1453,14 @@ pub struct IssueRequest {
     pub p12_password: Option<Secret>,
     pub validity_days: u32,
     pub actor: String,
+}
+
+/// Options of [`crate::pki::issue_with`] beyond the frozen [`IssueRequest`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IssueOptions {
+    /// Allow an EC or Ed25519 key for the examiner profile (`--allow-non-rsa-examiner`). Refused by default:
+    /// rv-hashinv signs PDF reports with RSA keys only.
+    pub allow_non_rsa_examiner: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

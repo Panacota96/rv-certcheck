@@ -1,4 +1,4 @@
-# ADR 0001 — Implementation language: Rust (Profile A)
+# ADR 0001 — Implementation language: Profile C, hybrid (pure Rust in v0.1)
 
 - Status: accepted
 - Date: 2026-10-29

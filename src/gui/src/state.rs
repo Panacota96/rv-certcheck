@@ -1054,6 +1054,40 @@ mod tests {
     }
 
     #[test]
+    fn issue_key_type_follows_the_library_default_per_profile_and_examiner_stays_rsa() {
+        use rv_certcheck_core::certs::{KeySpec, pki};
+        let mut s = GuiState::default();
+        assert_eq!(s.create.issue.profile, IssueProfile::Examiner);
+        assert_eq!(s.create.issue.key_type, KeySpec::Rsa3072);
+        assert_eq!(s.create.root.key_type, KeySpec::Rsa4096);
+        for (p, want) in [
+            (IssueProfile::Intermediate, KeySpec::P384),
+            (IssueProfile::Tsa, KeySpec::P256),
+            (IssueProfile::TlsServer, KeySpec::P256),
+            (IssueProfile::CodeSigning, KeySpec::Rsa3072),
+            (IssueProfile::Examiner, KeySpec::Rsa3072),
+        ] {
+            s.create_set_profile(p).unwrap();
+            assert_eq!(s.create.issue.key_type, want, "{p:?}");
+            assert_eq!(pki::default_key_spec(p), want);
+        }
+        // An EC examiner key is refused in the form, before any key is made.
+        s.set_tab(Tab::Create);
+        s.create_set_wizard(Some(Wizard::Issue));
+        let i = &mut s.create.issue;
+        i.subject = "C=CO,O=Rakvor Test,CN=Ana Ruiz".into();
+        i.key_type = KeySpec::P256;
+        i.ca_secret.buffer().push_str("ca-pw");
+        i.p12_password.buffer().push_str("p12-pw");
+        i.p12_again.buffer().push_str("p12-pw");
+        let e = match s.create_prepare() {
+            Ok(_) => panic!("an EC examiner key must be refused"),
+            Err(e) => e,
+        };
+        assert!(e.contains("RSA"), "{e}");
+    }
+
+    #[test]
     fn at_most_two_and_at_least_one_algorithm() {
         let mut s = GuiState::default();
         assert_eq!(s.selected, vec![HashAlgo::Sha256]);
@@ -1634,7 +1668,11 @@ mod tests {
         let i = &mut s.create.issue;
         i.subject = "C=CO,O=Rakvor Test,CN=Ana Ruiz".into();
         i.sans = "email:ana.ruiz@rakvor.test".into();
-        i.key_type = rv_certcheck_core::certs::KeySpec::P256;
+        assert_eq!(
+            i.key_type,
+            rv_certcheck_core::certs::KeySpec::Rsa3072,
+            "examiner defaults to RSA-3072 (rv-hashinv signs PDFs with RSA only)"
+        );
         typed(&mut i.key.password, exam_pw);
         typed(&mut i.key.password_again, exam_pw);
         typed(&mut i.ca_secret, int_pw);

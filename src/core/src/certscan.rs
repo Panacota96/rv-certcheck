@@ -356,7 +356,7 @@ pub fn cross_item_stage(
     }
     let v = &opts.validation;
     // (index, file name, path, first-pass digest, is a timestamp token) of every item, for imprint pairing.
-    let files: Vec<(u64, String, PathBuf, Option<(HashAlgo, String)>, bool)> = items
+    let files: Vec<RunFile> = items
         .iter()
         .map(|it| {
             (
@@ -490,13 +490,12 @@ pub fn cross_item_stage(
     out
 }
 
+/// (index, file name, path, first-pass digest, is a timestamp token) of one item of the run.
+type RunFile = (u64, String, PathBuf, Option<(HashAlgo, String)>, bool);
+
 /// Files paired with a timestamp token the way keys are paired with certificates: same stem, same run
 /// (`data.tsr` ↔ `data`, `data.txt`, `data.bin`; other timestamp tokens excluded).
-fn paired_files<'f>(
-    token_index: u64,
-    token_name: &str,
-    files: &'f [(u64, String, PathBuf, Option<(HashAlgo, String)>, bool)],
-) -> Vec<&'f (u64, String, PathBuf, Option<(HashAlgo, String)>, bool)> {
+fn paired_files<'f>(token_index: u64, token_name: &str, files: &'f [RunFile]) -> Vec<&'f RunFile> {
     let s = stem(token_name);
     if s.is_empty() {
         return vec![];
@@ -563,7 +562,7 @@ fn imprint_check(
     token_index: u64,
     token_name: &str,
     t: &certs::TimestampInfo,
-    files: &[(u64, String, PathBuf, Option<(HashAlgo, String)>, bool)],
+    files: &[RunFile],
 ) -> Option<certs::ImprintCheck> {
     let paired = paired_files(token_index, token_name, files);
     if paired.is_empty() {

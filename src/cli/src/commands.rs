@@ -603,10 +603,10 @@ pub enum PkiCommand {
         #[command(flatten)]
         subject: SubjectArgs,
         /// Key type: rsa-2048, rsa-3072, rsa-4096, p-256, p-384, ed25519.
-        /// Default: rsa-4096
+        /// Default: rsa-4096 (the library's root default)
         /// Example: --key-type p-384
-        #[arg(long, value_name = "TYPE", default_value = "rsa-4096", value_parser = parse_key_spec, verbatim_doc_comment, hide_default_value = true)]
-        key_type: KeySpec,
+        #[arg(long, value_name = "TYPE", value_parser = parse_key_spec, verbatim_doc_comment)]
+        key_type: Option<KeySpec>,
         #[command(flatten)]
         key: KeyArgs,
         /// Validity in days.
@@ -647,6 +647,13 @@ pub enum PkiCommand {
         /// Example: --cert packaging/signing/rakvor-code-signing-root.cer
         #[arg(long, value_name = "FILE", verbatim_doc_comment)]
         cert: PathBuf,
+        /// The certificate of the CA that issued --cert (PEM or DER), for an intermediate. It must have issued
+        /// --cert (name and signature); its SHA-256 is recorded as the parent in ca.json. The issuer's
+        /// subject and key id are recorded from --cert in any case.
+        /// Default: none (parent certificate SHA-256 not recorded)
+        /// Example: --issuer-cert E:\rakvor-pki\root-2026\certs\ca.crt
+        #[arg(long, value_name = "FILE", verbatim_doc_comment)]
+        issuer_cert: Option<PathBuf>,
         /// The CA key: --key-file (encrypted PKCS#8 or PKCS#12/.pfx, kept where it is) or --pkcs11-module,
         /// --token-serial and --key-id.
         #[command(flatten)]
@@ -683,11 +690,19 @@ pub enum PkiCommand {
         /// Example: --csr requests/hub.csr
         #[arg(long, value_name = "FILE", verbatim_doc_comment)]
         csr: Option<PathBuf>,
-        /// Key type of the new key (ignored with --csr).
-        /// Default: rsa-3072
+        /// Key type of the new key (ignored with --csr): rsa-2048, rsa-3072, rsa-4096, p-256, p-384, ed25519.
+        /// The examiner profile needs RSA (rv-hashinv signs PDF reports with RSA keys only): an EC or
+        /// Ed25519 examiner key is refused unless --allow-non-rsa-examiner is given.
+        /// Default: per profile: p-384 intermediate; p-256 tsa, tls-server; rsa-3072 code-signing, examiner
         /// Example: --key-type p-256
-        #[arg(long, value_name = "TYPE", default_value = "rsa-3072", value_parser = parse_key_spec, verbatim_doc_comment, hide_default_value = true)]
-        key_type: KeySpec,
+        #[arg(long, value_name = "TYPE", value_parser = parse_key_spec, verbatim_doc_comment)]
+        key_type: Option<KeySpec>,
+        /// Issue an examiner certificate with an EC or Ed25519 key anyway. Such a certificate cannot sign
+        /// rv-hashinv PDF reports (RSA only).
+        /// Default: off (a non-RSA examiner key is refused, exit 3)
+        /// Example: --allow-non-rsa-examiner
+        #[arg(long, verbatim_doc_comment)]
+        allow_non_rsa_examiner: bool,
         /// Where the NEW subject key goes (file or token). The CA key is unlocked with --ca-pass-env.
         #[command(flatten)]
         key: KeyArgs,
@@ -851,7 +866,26 @@ pub enum PkiCommand {
         #[command(flatten)]
         run: RunArgs,
     },
-    /// Verify a CA folder: the issued.jsonl hash chain, certs/ca.crt and the SHA-256 of every recorded file.
+    /// Change ca.json the recorded way (never edit it by hand: an edit outside the tool fails every
+    /// operation and `pki verify`). Sets or clears the CRL distribution point of future certificates.
+    #[command(after_long_help = format!("{CREATION_EXIT_CODES}\n\n{CREATION_FILES}\n  <CA>/ca.json rewritten, a ca_json_written record (its SHA-256) in <CA>/issued.jsonl"))]
+    Set {
+        /// CA folder.
+        /// Default: none (required)
+        /// Example: --ca E:\rakvor-pki\issuing-2026
+        #[arg(long, value_name = "DIR", verbatim_doc_comment)]
+        ca: PathBuf,
+        /// CRL distribution point (http:// or https://) written into every certificate issued from now on;
+        /// an empty value clears it. Certificates already issued keep the CDP they have.
+        /// Default: none (required)
+        /// Example: --crl-url http://pki.rakvor.example/issuing-2026.crl
+        #[arg(long, value_name = "URL", verbatim_doc_comment)]
+        crl_url: String,
+        #[command(flatten)]
+        run: RunArgs,
+    },
+    /// Verify a CA folder: the issued.jsonl hash chain, certs/ca.crt, ca.json, crl/latest.crl and the
+    /// SHA-256 of every recorded file.
     #[command(after_long_help = format!("{CREATION_EXIT_CODES}\n\n{CREATION_FILES}"))]
     Verify {
         /// CA folder.
@@ -884,6 +918,7 @@ pub fn pki(c: PkiCommand) -> u8 {
             confirm_root,
             run,
         } => {
+            let key_type = key_type.unwrap_or(certs::pki::ROOT_DEFAULT_KEY_SPEC);
             let subject = match subject.spec() {
                 Ok(s) => s,
                 Err(e) => return usage(&e),
@@ -950,12 +985,20 @@ pub fn pki(c: PkiCommand) -> u8 {
             ca,
             ca_id,
             cert,
+            issuer_cert,
             key,
             run,
         } => {
             let certificate = match read(&cert) {
                 Ok(b) => b,
                 Err(c) => return c,
+            };
+            let issuer = match &issuer_cert {
+                Some(p) => match read(p) {
+                    Ok(b) => Some(b),
+                    Err(c) => return c,
+                },
+                None => None,
             };
             let location = match key.location() {
                 Ok(l) => l,
@@ -966,19 +1009,24 @@ pub fn pki(c: PkiCommand) -> u8 {
                 Err(e) => return usage(&e),
             };
             let params = json!({"ca": ca.display().to_string(), "ca_id": ca_id, "cert": cert.display().to_string(),
-                                "cert_sha256": hash_bytes(&certificate, HashAlgo::Sha256), "key": key.describe()});
+                                "cert_sha256": hash_bytes(&certificate, HashAlgo::Sha256), "key": key.describe(),
+                                "issuer_cert": issuer_cert.as_ref().map(|p| p.display().to_string()),
+                                "issuer_cert_sha256": issuer.as_ref().map(|b| hash_bytes(b, HashAlgo::Sha256))});
             let mut r = match CreationRun::start(&run, "pki import", params) {
                 Ok(r) => r,
                 Err(c) => return c,
             };
-            match certs::pki::import_ca(&ImportCaRequest {
-                ca_dir: ca.clone(),
-                ca_id,
-                certificate,
-                key: location,
-                unlock,
-                actor: r.actor(),
-            }) {
+            match certs::pki::import_ca_with_issuer(
+                &ImportCaRequest {
+                    ca_dir: ca.clone(),
+                    ca_id,
+                    certificate,
+                    key: location,
+                    unlock,
+                    actor: r.actor(),
+                },
+                issuer.as_deref(),
+            ) {
                 Err(e) => r.fail(&e),
                 Ok(f) => {
                     r.record(
@@ -1017,12 +1065,26 @@ pub fn pki(c: PkiCommand) -> u8 {
             subject,
             csr,
             key_type,
+            allow_non_rsa_examiner,
             key,
             ca_pass_env,
             p12_pass_env,
             validity_days,
             run,
         } => {
+            let key_type = key_type.unwrap_or(certs::pki::default_key_spec(profile));
+            if profile == IssueProfile::Examiner
+                && csr.is_none()
+                && !key_type.is_rsa()
+                && !allow_non_rsa_examiner
+            {
+                // Refused before any password is asked for (the library refuses too).
+                eprintln!(
+                    "error: the examiner profile needs an RSA key ({} given): rv-hashinv signs PDF reports with RSA keys only. Use rsa-3072 (the default) or rsa-4096, or pass --allow-non-rsa-examiner",
+                    key_type.name()
+                );
+                return EXIT_REFUSED;
+            }
             let subject = match subject.spec() {
                 Ok(s) => s,
                 Err(e) => return usage(&e),
@@ -1072,23 +1134,28 @@ pub fn pki(c: PkiCommand) -> u8 {
                 "csr_sha256": csr_der.as_ref().map(|b| hash_bytes(b, HashAlgo::Sha256)),
                 "key_type": (csr.is_none()).then_some(key_type), "key": key.describe(),
                 "ca_secret_from_env": ca_pass_env, "p12_password_from_env": (profile == IssueProfile::Examiner).then_some(&p12_pass_env),
-                "validity_days": validity_days});
+                "validity_days": validity_days, "allow_non_rsa_examiner": allow_non_rsa_examiner});
             let mut r = match CreationRun::start(&run, "pki issue", params) {
                 Ok(r) => r,
                 Err(c) => return c,
             };
-            match certs::pki::issue(&IssueRequest {
-                ca_dir: ca.clone(),
-                ca_unlock,
-                profile,
-                subject,
-                csr_der,
-                key_spec: Some(key_type),
-                key_target,
-                p12_password,
-                validity_days,
-                actor: r.actor(),
-            }) {
+            match certs::pki::issue_with(
+                &IssueRequest {
+                    ca_dir: ca.clone(),
+                    ca_unlock,
+                    profile,
+                    subject,
+                    csr_der,
+                    key_spec: Some(key_type),
+                    key_target,
+                    p12_password,
+                    validity_days,
+                    actor: r.actor(),
+                },
+                &certs::IssueOptions {
+                    allow_non_rsa_examiner,
+                },
+            ) {
                 Err(e) => r.fail(&e),
                 Ok(res) => {
                     let rec = &res.record;
@@ -1219,9 +1286,16 @@ pub fn pki(c: PkiCommand) -> u8 {
                 Ok(res) => {
                     r.record("crl_signed", Some(&res.path.display().to_string()), json!({"crl_number": res.crl_number,
                         "sha256": res.sha256, "this_update": res.record.not_before, "next_update": res.record.not_after}));
-                    r.issued(&ca, &res.record);
+                    // The CRL record and the ca.json record that follows it (next_crl_number).
+                    for rec in issued_records(&ca)
+                        .into_iter()
+                        .filter(|x| x.seq >= res.record.seq)
+                    {
+                        r.issued(&ca, &rec);
+                    }
                     r.file("CRL", &res.path);
                     r.file("CRL (latest)", &ca.join("crl").join("latest.crl"));
+                    r.file("ca.json", &ca.join("ca.json"));
                     let revoked = issued_records(&ca)
                         .iter()
                         .filter(|x| x.action == "revoked")
@@ -1373,6 +1447,46 @@ pub fn pki(c: PkiCommand) -> u8 {
                     }
                     let result = json!({"ca": f, "issued": issued, "records": records.len()});
                     r.finish(result, s, &internal_notice(), EXIT_OK)
+                }
+            }
+        }
+        PkiCommand::Set { ca, crl_url, run } => {
+            let mut r = match CreationRun::start(
+                &run,
+                "pki set",
+                json!({"ca": ca.display().to_string(), "crl_url": crl_url}),
+            ) {
+                Ok(r) => r,
+                Err(c) => return c,
+            };
+            let actor = r.actor();
+            match certs::pki::set_crl_url(&ca, Some(&crl_url), &actor) {
+                Err(e) => r.fail(&e),
+                Ok((f, rec)) => {
+                    r.record(
+                        "ca_json_changed",
+                        Some(&f.ca_id),
+                        json!({"crl_url": f.crl_url}),
+                    );
+                    r.issued(&ca, &rec);
+                    r.file("ca.json", &ca.join("ca.json"));
+                    let s = vec![
+                        format!("CA {} updated.", f.ca_id),
+                        format!(
+                            "  crl_url:     {}",
+                            f.crl_url.as_deref().unwrap_or("(none)")
+                        ),
+                        format!(
+                            "  ca.json:     recorded in issued.jsonl (record {})",
+                            rec.seq
+                        ),
+                    ];
+                    r.finish(
+                        json!({"ca": f, "record": rec}),
+                        s,
+                        &internal_notice(),
+                        EXIT_OK,
+                    )
                 }
             }
         }

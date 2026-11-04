@@ -387,9 +387,10 @@ fn round_trip_every_profile_revocation_and_tamper_evidence() {
         assert_eq!(r.response_status, x509_ocsp::OcspResponseStatus::Successful);
     }
 
-    // issued.jsonl: root, 5 issued, 1 revoked, 2 CRLs, 2 OCSP = 11 records, chain intact.
+    // issued.jsonl: root + its ca.json, 5 issued, 1 revoked, 2 CRLs each followed by the ca.json it rewrote,
+    // 2 OCSP = 14 records, chain intact.
     let log = std::fs::read_to_string(ca.join("issued.jsonl")).unwrap();
-    assert_eq!(log.lines().count(), 11);
+    assert_eq!(log.lines().count(), 14);
     assert!(pki::open(&ca).is_ok());
     let actions: Vec<String> = log
         .lines()
@@ -399,6 +400,7 @@ fn round_trip_every_profile_revocation_and_tamper_evidence() {
         actions,
         [
             "ca_created",
+            "ca_json_written",
             "issued",
             "issued",
             "issued",
@@ -406,7 +408,9 @@ fn round_trip_every_profile_revocation_and_tamper_evidence() {
             "issued",
             "revoked",
             "crl_issued",
+            "ca_json_written",
             "crl_issued",
+            "ca_json_written",
             "ocsp_signed",
             "ocsp_signed"
         ]

@@ -199,7 +199,7 @@ fn create_state(out: &Path) -> GuiState {
         s.create_set_profile(prof).unwrap();
         s.create.issue.subject = format!("C=CO,O=Rakvor SAS,CN={cn}");
         s.create.issue.sans = mail.into();
-        s.create.issue.key_type = KeySpec::P256;
+        // The library's per-profile default: rsa-3072 examiner (rv-hashinv signs with RSA), p-256 tls-server.
         s.create.issue.validity_days = "825".into();
         pw(&mut s.create.issue.key.password, "screenshot-key");
         pw(&mut s.create.issue.key.password_again, "screenshot-key");

@@ -563,6 +563,7 @@
     "err_tls_san": "tls-server requiere al menos un SAN dns: o ip:.",
     "err_ca_secret": "Escriba la contraseña o el PIN de la clave de la CA.",
     "err_examiner_file_key": "El perfil de perito requiere una clave nueva en archivo (el .p12 la contiene).",
+    "err_examiner_rsa": "El perfil de perito requiere una clave RSA (rsa-3072 o rsa-4096): rv-hashinv firma los informes PDF solo con claves RSA, así que un certificado de perito EC o Ed25519 no podría firmar informes.",
     "err_p12_password": "Escriba la contraseña del .p12 (dos veces).",
     "err_open_ca_first": "Abra primero una carpeta de CA (izquierda).",
     "err_serial": "Elija el certificado a revocar.",

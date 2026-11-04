@@ -1,10 +1,13 @@
 //! OWNER: B. CA folders (`rakvor.ca/1`): root, import, issue, revoke, CRL, OCSP.
 //!
 //! ```text
-//! <CA>/ca.json            CaFolder (rewritten only for next_crl_number)
+//! <CA>/ca.json            CaFolder; every version written is recorded in issued.jsonl (`ca_json_written`,
+//!                         SHA-256), so an edit outside the tool (crl_url, allowed_profiles, ...) is detected
+//!                         by every operation and by `pki verify`. `pki set` is the recorded way to change it.
 //! <CA>/issued.jsonl       hash-chained IssuedRecord per operation (issued.rs)
 //! <CA>/certs/ca.crt       the CA certificate (PEM); certs/<serial>.crt for every certificate issued
-//! <CA>/crl/<n>.crl        every CRL (DER), crl/latest.crl a copy of the newest
+//! <CA>/crl/<n>.crl        every CRL (DER, recorded: number, SHA-256, file), crl/latest.crl a copy of the newest
+//!                         (checked against the newest recorded CRL)
 //! <CA>/ocsp/<serial>-<time>.der   every OCSP response signed (lab use)
 //! <CA>/keys/              encrypted CA key (0600; directory 0700); token keys are only referenced in ca.json
 //! ```
@@ -332,6 +335,9 @@ fn client_internal_refused() -> CertError {
     )
 }
 
+/// Default key of `pki init-root`.
+pub const ROOT_DEFAULT_KEY_SPEC: KeySpec = KeySpec::Rsa4096;
+
 fn default_profiles(path_len_zero: bool) -> Vec<IssueProfile> {
     IssueProfile::ALL
         .into_iter()
@@ -340,7 +346,10 @@ fn default_profiles(path_len_zero: bool) -> Vec<IssueProfile> {
         .collect()
 }
 
-fn default_key_spec(profile: IssueProfile) -> KeySpec {
+/// The key type `pki issue` uses when none is given: P-384 intermediate; P-256 tsa / tls-server; RSA-3072
+/// code-signing / examiner (Windows signtool and rv-hashinv's RSA-only PDF signing must load them).
+/// `init-root` defaults to RSA-4096 ([`ROOT_DEFAULT_KEY_SPEC`]).
+pub fn default_key_spec(profile: IssueProfile) -> KeySpec {
     match profile {
         // RSA for what Windows signtool / rv-hashinv (RSA-only PDF signing) must load.
         IssueProfile::CodeSigning | IssueProfile::Examiner => KeySpec::Rsa3072,
@@ -402,10 +411,19 @@ impl Ca {
             ..Default::default()
         }
     }
-    fn save_folder(&self) -> CertResult<()> {
+    fn save_folder(&self) -> CertResult<String> {
         let mut j = serde_json::to_string_pretty(&self.folder).expect("serializable");
         j.push('\n');
-        keys::replace(&self.dir.join("ca.json"), j.as_bytes())
+        keys::replace(&self.dir.join("ca.json"), j.as_bytes())?;
+        Ok(sha256_hex(j.as_bytes()))
+    }
+    /// Writes ca.json and records its SHA-256 (`ca_json_written`), so that only the tool changes it.
+    fn save_and_record(&mut self, actor: &str) -> CertResult<IssuedRecord> {
+        let sha = self.save_folder()?;
+        let mut r = self.record(CA_JSON_WRITTEN, actor);
+        r.file = Some("ca.json".into());
+        r.file_sha256 = Some(sha);
+        self.append(r)
     }
 }
 
@@ -455,18 +473,7 @@ fn load(ca_dir: &Path) -> CertResult<Ca> {
             "the first issued.jsonl record does not create or import this CA certificate".into(),
         ),
     }
-    for r in &records {
-        if let (Some(f), Some(h)) = (&r.file, &r.file_sha256) {
-            match std::fs::read(ca_dir.join(f)) {
-                Ok(b) if sha256_hex(&b) == *h => {}
-                Ok(_) => problems.push(format!(
-                    "{f} (record {}) was modified after it was recorded",
-                    r.seq
-                )),
-                Err(_) => problems.push(format!("{f} (record {}) is missing", r.seq)),
-            }
-        }
-    }
+    problems.extend(recorded_file_problems(ca_dir, &records));
     if !problems.is_empty() {
         return Err(CertError::new(
             ErrorKind::Policy,
@@ -485,6 +492,65 @@ fn load(ca_dir: &Path) -> CertResult<Ca> {
         cert_der,
         records,
     })
+}
+
+/// The record action of every ca.json written by the tool.
+pub const CA_JSON_WRITTEN: &str = "ca_json_written";
+
+/// Every file a record names must still have the SHA-256 of its *latest* record (ca.json is rewritten, so only
+/// its last version counts; certificates, CRLs and OCSP responses are written once). ca.json must be recorded,
+/// and crl/latest.crl must be the newest recorded CRL.
+fn recorded_file_problems(ca_dir: &Path, records: &[IssuedRecord]) -> Vec<String> {
+    let mut problems = vec![];
+    let mut latest: std::collections::BTreeMap<&str, &IssuedRecord> = Default::default();
+    for r in records {
+        if let (Some(f), Some(_)) = (&r.file, &r.file_sha256) {
+            latest.insert(f.as_str(), r);
+        }
+    }
+    for (f, r) in &latest {
+        let h = r.file_sha256.as_deref().unwrap_or_default();
+        match std::fs::read(ca_dir.join(f)) {
+            Ok(b) if sha256_hex(&b) == h => {}
+            Ok(_) => problems.push(format!(
+                "{f} (record {}) was modified after it was recorded",
+                r.seq
+            )),
+            Err(_) => problems.push(format!("{f} (record {}) is missing", r.seq)),
+        }
+    }
+    if !latest.contains_key("ca.json") {
+        problems.push(
+            "ca.json is not recorded in issued.jsonl (no ca_json_written record): its content cannot be trusted"
+                .into(),
+        );
+    }
+    let newest_crl = records
+        .iter()
+        .filter(|r| r.action == "crl_issued")
+        .max_by_key(|r| (r.crl_number.unwrap_or(0), r.seq));
+    let latest_path = ca_dir.join("crl").join("latest.crl");
+    match (newest_crl, std::fs::read(&latest_path)) {
+        (Some(r), Ok(b)) => {
+            if Some(sha256_hex(&b).as_str()) != r.file_sha256.as_deref() {
+                problems.push(format!(
+                    "crl/latest.crl is not the newest recorded CRL ({}, record {})",
+                    r.file.as_deref().unwrap_or("?"),
+                    r.seq
+                ));
+            }
+        }
+        (Some(r), Err(_)) => problems.push(format!(
+            "crl/latest.crl is missing (newest recorded CRL: {}, record {})",
+            r.file.as_deref().unwrap_or("?"),
+            r.seq
+        )),
+        (None, Ok(_)) => {
+            problems.push("crl/latest.crl exists but no CRL is recorded in issued.jsonl".into())
+        }
+        (None, Err(_)) => {}
+    }
+    problems
 }
 
 /// Verifies a CA folder (ca.json, issued.jsonl chain, recorded files) and returns the number of records.
@@ -508,7 +574,7 @@ pub fn init_root(req: &InitRootRequest) -> CertResult<CaFolder> {
     if matches!(req.key_target, KeyTarget::Pkcs11 { .. }) && !req.confirm_root {
         return Err(CertError::new(
             ErrorKind::Policy,
-            "creating a root CA key on a token needs --confirm-root (the key ceremony checklist is in docs/installation.md)",
+            "creating a root CA key on a token needs --confirm-root (the key ceremony checklist is in docs/company-pki.md)",
         ));
     }
     check_id(&req.ca_id)?;
@@ -569,6 +635,8 @@ pub fn init_root(req: &InitRootRequest) -> CertResult<CaFolder> {
         key: key_loc.clone(),
         parent: None,
         parent_certificate_sha256: None,
+        parent_subject: None,
+        parent_key_id_hex: None,
         allowed_profiles: default_profiles(false),
         next_crl_number: 1,
         serial_policy: "random-128".into(),
@@ -596,13 +664,42 @@ pub fn init_root(req: &InitRootRequest) -> CertResult<CaFolder> {
     r.file_sha256 = Some(file_sha);
     r.key = Some(key_loc);
     ca.append(r)?;
+    ca.save_and_record(&req.actor)?;
     Ok(folder)
 }
 
 pub fn import_ca(req: &ImportCaRequest) -> CertResult<CaFolder> {
+    import_ca_with_issuer(req, None)
+}
+
+/// [`import_ca`] with the issuer's certificate (`pki import --issuer-cert`): it must have issued the imported
+/// certificate (name and signature), and its SHA-256 is recorded as `parent_certificate_sha256`.
+pub fn import_ca_with_issuer(
+    req: &ImportCaRequest,
+    issuer_certificate: Option<&[u8]>,
+) -> CertResult<CaFolder> {
     check_id(&req.ca_id)?;
     let der = keys::der_from_pem_or_der(&req.certificate, &["CERTIFICATE"])?;
     let cert = x509_der(&der)?;
+    let issuer_sha = match issuer_certificate {
+        None => None,
+        Some(b) => {
+            let idr = keys::der_from_pem_or_der(b, &["CERTIFICATE"])?;
+            let ic = x509_der(&idr)?;
+            let names_match = ic.subject_name().to_der().ok() == cert.issuer_name().to_der().ok();
+            let signed = ic
+                .public_key()
+                .and_then(|k| cert.verify(&k))
+                .unwrap_or(false);
+            if !names_match || !signed {
+                return Err(CertError::new(
+                    ErrorKind::Policy,
+                    "--issuer-cert did not issue this certificate (issuer name or signature does not match)",
+                ));
+            }
+            Some(sha256_hex(&idr))
+        }
+    };
     let (_, parsed) = x509_parser::parse_x509_certificate(&der)
         .map_err(|e| CertError::new(ErrorKind::Parse, format!("certificate: {e}")))?;
     let is_ca = parsed
@@ -698,7 +795,13 @@ pub fn import_ca(req: &ImportCaRequest) -> CertResult<CaFolder> {
         key_spec: keys::spec_of(&pk),
         key: key_loc.clone(),
         parent: None,
-        parent_certificate_sha256: None,
+        parent_certificate_sha256: issuer_sha,
+        parent_subject: (!self_signed).then(|| name_string(cert.issuer_name())),
+        parent_key_id_hex: if self_signed {
+            None
+        } else {
+            cert.authority_key_id().map(|k| hex(k.as_slice()))
+        },
         allowed_profiles: default_profiles(cert.pathlen() == Some(0)),
         next_crl_number: 1,
         serial_policy: "random-128".into(),
@@ -726,7 +829,35 @@ pub fn import_ca(req: &ImportCaRequest) -> CertResult<CaFolder> {
     r.file_sha256 = Some(file_sha);
     r.key = Some(key_loc);
     ca.append(r)?;
+    ca.save_and_record(&req.actor)?;
     Ok(folder)
+}
+
+/// `pki set --crl-url URL`: the recorded way to change ca.json. Verifies the folder, sets (or, with None or an
+/// empty string, clears) the CRL distribution point written into every certificate issued from now on, and
+/// records the new ca.json. Returns the folder and the `ca_json_written` record.
+pub fn set_crl_url(
+    ca_dir: &Path,
+    url: Option<&str>,
+    actor: &str,
+) -> CertResult<(CaFolder, IssuedRecord)> {
+    let url = url.map(str::trim).filter(|u| !u.is_empty());
+    if let Some(u) = url {
+        let lower = u.to_ascii_lowercase();
+        if !(lower.starts_with("http://") || lower.starts_with("https://"))
+            || u.chars().any(|c| c.is_whitespace() || c.is_control())
+        {
+            return Err(CertError::new(
+                ErrorKind::InvalidInput,
+                format!("--crl-url '{u}': give an http:// or https:// URL without spaces"),
+            ));
+        }
+    }
+    let _lock = Lock::take(ca_dir)?;
+    let mut ca = load(ca_dir)?;
+    ca.folder.crl_url = url.map(String::from);
+    let r = ca.save_and_record(actor)?;
+    Ok((ca.folder, r))
 }
 
 pub fn open(ca_dir: &Path) -> CertResult<CaFolder> {
@@ -751,8 +882,25 @@ pub(crate) fn csr_parts(der: &[u8]) -> CertResult<(Vec<u8>, Vec<GeneralName>, Ve
 }
 
 pub fn issue(req: &IssueRequest) -> CertResult<IssueResult> {
+    issue_with(req, &IssueOptions::default())
+}
+
+pub fn issue_with(req: &IssueRequest, opts: &IssueOptions) -> CertResult<IssueResult> {
     if !req.profile.enabled() {
         return Err(client_internal_refused());
+    }
+    if req.profile == IssueProfile::Examiner {
+        let spec = req.key_spec.unwrap_or(default_key_spec(req.profile));
+        if !spec.is_rsa() && !opts.allow_non_rsa_examiner {
+            return Err(CertError::new(
+                ErrorKind::Policy,
+                format!(
+                    "the examiner profile needs an RSA key ({} given): rv-hashinv signs PDF reports with RSA keys only, so an {} examiner certificate could not sign reports. Use rsa-3072 (the default) or rsa-4096, or pass --allow-non-rsa-examiner for a certificate that will not sign rv-hashinv reports",
+                    spec.name(),
+                    spec.name()
+                ),
+            ));
+        }
     }
     let _lock = Lock::take(&req.ca_dir)?;
     let mut ca = load(&req.ca_dir)?;
@@ -1044,7 +1192,7 @@ pub fn make_crl(req: &CrlRequest) -> CertResult<CrlResult> {
     r.not_after = Some(rfc3339(next));
     let record = ca.append(r)?;
     ca.folder.next_crl_number = number + 1;
-    ca.save_folder()?;
+    ca.save_and_record(&req.actor)?;
     Ok(CrlResult {
         record,
         path,
@@ -1171,18 +1319,19 @@ mod tests {
             actor: "t".into(),
         })
         .unwrap();
-        assert_eq!(verify_folder(&ca).unwrap(), 1);
+        // ca_created + ca_json_written.
+        assert_eq!(verify_folder(&ca).unwrap(), 2);
         // A record appended by hand with a correct-looking but recomputed-without-chain hash is refused.
         let path = ca.join(issued::FILE);
         let mut text = std::fs::read_to_string(&path).unwrap();
         let mut v: serde_json::Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
-        v["seq"] = 2.into();
+        v["seq"] = 3.into();
         v["action"] = "issued".into();
         text.push_str(&serde_json::to_string(&v).unwrap());
         text.push('\n');
         std::fs::write(&path, text).unwrap();
         let e = verify_folder(&ca).unwrap_err();
-        assert!(e.message.contains("line 2"), "{}", e.message);
+        assert!(e.message.contains("line 3"), "{}", e.message);
         // A stale lock is reported, not broken.
         std::fs::write(ca.join("issued.lock"), "pid 1").unwrap();
         assert!(Lock::take(&ca).unwrap_err().message.contains("issued.lock"));

@@ -563,6 +563,7 @@
     "err_tls_san": "tls-server exige au moins un SAN dns: ou ip:.",
     "err_ca_secret": "Saisissez le mot de passe ou le PIN de la clé de l'AC.",
     "err_examiner_file_key": "Le profil expert exige une nouvelle clé dans un fichier (le .p12 la contient).",
+    "err_examiner_rsa": "Le profil expert exige une clé RSA (rsa-3072 ou rsa-4096) : rv-hashinv signe les rapports PDF uniquement avec des clés RSA, un certificat expert EC ou Ed25519 ne pourrait donc pas signer de rapports.",
     "err_p12_password": "Saisissez le mot de passe du .p12 (deux fois).",
     "err_open_ca_first": "Ouvrez d'abord un dossier d'AC (à gauche).",
     "err_serial": "Choisissez le certificat à révoquer.",
