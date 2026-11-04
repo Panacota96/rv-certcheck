@@ -618,6 +618,19 @@ impl GuiState {
         }
     }
 
+    /// The case folder given by RV Hub (`--case-dir`): preset like a typed folder (`ui_case_dir_changed`) and
+    /// recorded as `ui_case_dir_from_launcher`, so the audit log shows the folder was not chosen in the GUI.
+    pub fn set_case_dir_from_launcher(&mut self, path: &std::path::Path) {
+        let shown = path.display().to_string();
+        self.note("ui_case_dir_from_launcher", json!({"path": shown}));
+        self.set_case_dir(&shown);
+    }
+
+    /// A launch argument that was ignored (e.g. `--case-dir` without a folder), recorded in the audit log.
+    pub fn note_launch_problem(&mut self, problem: &str) {
+        self.note("ui_launch_argument_ignored", json!({"problem": problem}));
+    }
+
     pub fn out_locked(&self) -> bool {
         !self.case_dir.trim().is_empty()
     }

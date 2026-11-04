@@ -1835,3 +1835,35 @@ EXIT CODES:
      an evidence file differs from the registry.
 ```
 
+## rv-certcheck describe
+
+```text
+Describe this tool as JSON (schema rakvor.describe/1) for RV Hub and scripts
+
+Usage: rv-certcheck describe [OPTIONS]
+
+Options:
+      --json
+          Print JSON: one pretty-printed object with sorted keys.
+          Default: on (JSON is the only format)
+          Example: --json
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+DESCRIPTION:
+  Prints what this tool is, what it accepts and how to launch it, validated by
+  schemas/describe.schema.json. RV Hub reads it to list the tool, start its GUI on a case
+  folder (rv-certcheck-gui.exe --case-dir <CASE> [FILES...]) and suggest the tool for a file.
+  Fields: schema, tool, title, version, role (analysis), main_verb (analyze), accepts
+  (extensions crt, cer, der, pem, p7b, p7c, p12, pfx, crl, tsr, tst, key, csr; signatures:
+  a DER SEQUENCE 30 82, a PEM -----BEGIN), case_formats, log_formats, cli_exe, gui_exe,
+  exit_codes. Nothing is read or written; no audit log is created.
+
+EXAMPLES:
+  rv-certcheck describe --json
+
+EXIT CODES:
+  0  The description was printed.
+```
+

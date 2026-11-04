@@ -117,6 +117,36 @@ every run's audit chain and timestamp tokens, and the cross-links between the ca
 See [usage-gui.md](usage-gui.md). The engine, outputs and findings are the same as the CLI's; every setting
 changed before a run is written to its audit log (`ui_*` actions).
 
+### Starting from RV Hub: `--case-dir` and `describe --json`
+
+RV Hub (the Rakvor launcher) finds the installed tools, opens them on a case folder and suggests which one fits a
+file. It relies on two entry points of RV CertCheck:
+
+- **`rv-certcheck-gui.exe --case-dir <CASE> [FILES...]`** starts the desktop app with **Case folder** already
+  filled (`--case-dir=<CASE>` also works). Other arguments are pre-loaded as evidence, as when files are dropped on
+  the icon. The preset is written to the run's audit log as `ui_case_dir_from_launcher` (path and `at_utc`)
+  followed by `ui_case_dir_changed`. `--case-dir` without a folder is ignored: the window says so and the audit log
+  records `ui_launch_argument_ignored`.
+- **`rv-certcheck describe --json`** prints one JSON object (sorted keys) that RV Hub reads; it is hidden from
+  `rv-certcheck --help` but listed in [usage-cli.md](usage-cli.md). It reads and writes nothing. Schema:
+  [`schemas/describe.schema.json`](../schemas/describe.schema.json) (`rakvor.describe/1`, identical in every Rakvor
+  tool).
+
+| Field | Meaning |
+| --- | --- |
+| `schema` | `rakvor.describe/1` |
+| `tool`, `title`, `version` | `rv-certcheck`, `RV CertCheck`, the product version (`version.txt`) |
+| `role` | `analysis` (examines evidence registered in the case folder by rv-hashinv) |
+| `main_verb` | `analyze`: the command that does the main work |
+| `accepts` | `extensions` crt, cer, der, pem, p7b, p7c, p12, pfx, crl, tsr, tst, key, csr; `signatures` `30 82` (a DER SEQUENCE, offset 0) and `-----BEGIN` (PEM). Inputs are still recognised by content, whatever their name |
+| `case_formats`, `log_formats` | `rakvor.case/1`; `rakvor.audit/1` = `logs/audit.jsonl` |
+| `cli_exe`, `gui_exe` | `rv-certcheck.exe`, `rv-certcheck-gui.exe` |
+| `exit_codes` | The meaning of 0, 1, 2, 3 and 130 |
+
+```powershell
+rv-certcheck describe --json
+```
+
 ## 3. Reading the outputs
 
 ```mermaid

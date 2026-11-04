@@ -180,6 +180,22 @@ impl HashInvApp {
         app
     }
 
+    /// Starts from the executable's arguments: input paths plus `--case-dir DIR` (RV Hub).
+    pub fn from_launch(args: crate::launch::LaunchArgs) -> Self {
+        let mut app = Self::with_inputs(args.inputs);
+        if let Some(dir) = args.case_dir {
+            app.state.set_case_dir_from_launcher(&dir);
+            app.case_entry = dir.display().to_string();
+        }
+        for n in &args.notes {
+            app.state.note_launch_problem(n);
+        }
+        if !args.notes.is_empty() {
+            app.notice = Some(args.notes.join("\n"));
+        }
+        app
+    }
+
     fn start(&mut self, ctx: &egui::Context) {
         let cfg: RunConfig = match self.state.to_config() {
             Ok(c) => c,
@@ -2030,5 +2046,50 @@ impl Default for HashInvApp {
 impl eframe::App for HashInvApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.draw(ui);
+    }
+}
+
+#[cfg(test)]
+mod launch_tests {
+    use super::*;
+    use crate::launch::parse_launch_args;
+
+    fn launch(args: &[&str]) -> HashInvApp {
+        HashInvApp::from_launch(parse_launch_args(args.iter().map(std::ffi::OsString::from)))
+    }
+
+    fn actions(app: &HashInvApp) -> Vec<&str> {
+        app.state
+            .ui
+            .actions
+            .iter()
+            .map(|(a, _)| a.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn launcher_case_dir_is_preset_and_audited() {
+        let app = launch(&["--case-dir", "X", "a.crt"]);
+        assert_eq!(app.state.case_dir, "X");
+        assert_eq!(app.case_entry, "X");
+        assert!(app.state.out_locked());
+        let a = actions(&app);
+        assert!(
+            a.ends_with(&["ui_case_dir_from_launcher", "ui_case_dir_changed"]),
+            "{a:?}"
+        );
+        assert!(app.notice.is_none());
+    }
+
+    #[test]
+    fn case_dir_without_a_value_is_noted_and_ignored() {
+        let app = launch(&["a.crt", "--case-dir"]);
+        assert!(app.state.case_dir.is_empty());
+        assert!(actions(&app).contains(&"ui_launch_argument_ignored"));
+        assert!(
+            app.notice
+                .as_deref()
+                .is_some_and(|n| n.contains("--case-dir"))
+        );
     }
 }
