@@ -84,11 +84,15 @@ fn browse(ui: &mut egui::Ui, label: &str, folder: bool) -> Option<PathBuf> {
 }
 
 fn masked(ui: &mut egui::Ui, f: &mut MaskedField, width: f32) -> egui::Response {
-    ui.add(
-        egui::TextEdit::singleline(f.buffer())
-            .password(true)
-            .desired_width(width),
-    )
+    let out = egui::TextEdit::singleline(f.buffer())
+        .password(true)
+        .desired_width(width)
+        .show(ui);
+    // egui's undo history keeps copies of the text: a masked field has none.
+    let mut st = out.state;
+    st.clear_undoer();
+    st.store(ui.ctx(), out.response.response.id);
+    out.response.response
 }
 
 fn entry(ui: &mut egui::Ui, s: &mut String, hint: &str, width: f32) -> egui::Response {
