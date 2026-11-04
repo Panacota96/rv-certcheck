@@ -253,7 +253,9 @@ legal status; follow its identification procedure.
 **Renewal.** Certificates are never extended: issue a new one before the old one expires (`pki show` lists every
 certificate with its expiry), deploy it, then revoke the old one with reason `superseded`. Suggested lifetimes:
 root 20 years, intermediate 5 years (renew after 4), code signing 2 years, examiners 2 years, TLS 397 days. Signed
-releases and reports stay verifiable after expiry because they carry an RFC 3161 timestamp.
+releases stay verifiable after expiry because signtool adds an RFC 3161 timestamp (`/tr`). Signed PDF reports carry
+no signature timestamp of their own in this version: their time rests on the RFC 3161 timestamp of the run's audit
+log, which records each report's SHA-256.
 
 A new intermediate is a root ceremony (section 2 with the root token). A new root is a full ceremony; run old and new
 roots side by side until every machine trusts the new one.
