@@ -899,3 +899,100 @@ fn colombian_csv_suspended_service_is_not_an_anchor_during_the_suspension() {
                 && s.params.get("service_status").map(String::as_str) == Some("suspended"))
     );
 }
+
+/// A CA certificate whose key usage lacks keyCertSign, built here with the openssl crate.
+fn ca_without_cert_sign() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    use openssl::asn1::Asn1Time;
+    use openssl::bn::BigNum;
+    use openssl::ec::{EcGroup, EcKey};
+    use openssl::hash::MessageDigest;
+    use openssl::nid::Nid;
+    use openssl::pkey::{PKey, Private};
+    use openssl::x509::extension::{BasicConstraints, KeyUsage};
+    use openssl::x509::{X509, X509NameBuilder};
+    let key = || -> PKey<Private> {
+        PKey::from_ec_key(
+            EcKey::generate(&EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap()).unwrap(),
+        )
+        .unwrap()
+    };
+    let name = |cn: &str| {
+        let mut n = X509NameBuilder::new().unwrap();
+        n.append_entry_by_text("CN", cn).unwrap();
+        n.build()
+    };
+    let make = |subj: &str,
+                issuer: &str,
+                pk: &PKey<Private>,
+                sk: &PKey<Private>,
+                ca: bool,
+                ku: KeyUsage,
+                serial: u32| {
+        let mut b = X509::builder().unwrap();
+        b.set_version(2).unwrap();
+        b.set_serial_number(&BigNum::from_u32(serial).unwrap().to_asn1_integer().unwrap())
+            .unwrap();
+        b.set_subject_name(&name(subj)).unwrap();
+        b.set_issuer_name(&name(issuer)).unwrap();
+        b.set_pubkey(pk).unwrap();
+        b.set_not_before(&Asn1Time::from_str("20250101000000Z").unwrap())
+            .unwrap();
+        b.set_not_after(&Asn1Time::from_str("20350101000000Z").unwrap())
+            .unwrap();
+        let mut bc = BasicConstraints::new();
+        if ca {
+            bc.critical().ca();
+        }
+        b.append_extension(bc.build().unwrap()).unwrap();
+        let mut ku = ku;
+        b.append_extension(ku.critical().build().unwrap()).unwrap();
+        b.sign(sk, MessageDigest::sha256()).unwrap();
+        b.build().to_der().unwrap()
+    };
+    let (rk, ik, lk) = (key(), key(), key());
+    let mut root_ku = KeyUsage::new();
+    root_ku.key_cert_sign().crl_sign();
+    let root = make("Bad Root", "Bad Root", &rk, &rk, true, root_ku, 1);
+    let mut int_ku = KeyUsage::new();
+    int_ku.digital_signature();
+    let int = make("Bad Intermediate", "Bad Root", &ik, &rk, true, int_ku, 2);
+    let mut leaf_ku = KeyUsage::new();
+    leaf_ku.digital_signature();
+    let leaf = make("bad-leaf", "Bad Intermediate", &lk, &ik, false, leaf_ku, 3);
+    (root, int, leaf)
+}
+
+#[test]
+fn an_unmapped_verify_error_is_cert_chain_invalid_not_untrusted() {
+    let (root, int, leaf) = ca_without_cert_sign();
+    let anchors = vec![ResolvedAnchor {
+        spec: "file:bad-root.crt".into(),
+        certificates: vec![LabeledDer::new("file:bad-root.crt", root)],
+        ..Default::default()
+    }];
+    let untrusted = vec![int];
+    let v = validate_chain(
+        &ChainRequest {
+            target_der: &leaf,
+            untrusted_der: &untrusted,
+            anchors: &anchors,
+            ..Default::default()
+        },
+        &opts(AT, Purpose::Any),
+    )
+    .unwrap();
+    // OpenSSL 3: X509_V_ERR_INVALID_CA (79) at depth 1 (1.1 answered 32, KEYUSAGE_NO_CERTSIGN): both unmapped.
+    assert!(matches!(v.openssl_code, 32 | 79), "{v:#?}");
+    assert_eq!(v.status, ChainStatus::Invalid, "{v:#?}");
+    let s = v
+        .signals
+        .iter()
+        .find(|s| s.code == codes::CERT_CHAIN_INVALID)
+        .unwrap_or_else(|| panic!("{v:#?}"));
+    assert_eq!(s.params["code"], v.openssl_code.to_string());
+    assert_eq!(s.params["depth"], "1");
+    assert!(!s.params["reason"].is_empty());
+    assert!(!has(&v, codes::CERT_CHAIN_UNTRUSTED), "{v:#?}");
+    assert!(!has(&v, codes::CERT_CHAIN_VALID), "{v:#?}");
+    assert_eq!(codes::severity(codes::CERT_CHAIN_INVALID), Some("high"));
+}
