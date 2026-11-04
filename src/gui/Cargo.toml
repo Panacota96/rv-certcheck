@@ -20,7 +20,11 @@ path = "src/lib.rs"
 rv-certcheck-core.workspace = true
 eframe.workspace = true
 serde_json.workspace = true
+zeroize.workspace = true
 
 # Native file/folder pickers on Windows (no GTK/portal dependency elsewhere: a text field is used instead).
 [target.'cfg(windows)'.dependencies]
 rfd.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

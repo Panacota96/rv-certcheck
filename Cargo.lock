@@ -3549,6 +3549,8 @@ dependencies = [
  "rfd",
  "rv-certcheck-core",
  "serde_json",
+ "tempfile",
+ "zeroize",
 ]
 
 [[package]]
