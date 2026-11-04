@@ -3517,12 +3517,14 @@ dependencies = [
  "clap",
  "ctrlc",
  "indicatif",
+ "pem",
  "predicates",
  "rpassword",
  "rv-certcheck-core",
  "serde",
  "serde_json",
  "tempfile",
+ "zeroize",
 ]
 
 [[package]]
