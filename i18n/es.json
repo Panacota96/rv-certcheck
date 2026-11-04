@@ -569,6 +569,7 @@
     "err_out_dir": "Indique la carpeta de ejecuciones.",
     "err_ca_folder": "Indique la carpeta de la CA.",
     "err_module": "Indique el módulo PKCS#11.",
-    "err_tl_file": "No existe el archivo de lista de confianza"
+    "err_tl_file": "No existe el archivo de lista de confianza",
+    "ca_records": "Registros"
   }
 }

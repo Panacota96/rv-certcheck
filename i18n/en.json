@@ -569,6 +569,7 @@
     "err_out_dir": "Give the runs folder.",
     "err_ca_folder": "Give the CA folder.",
     "err_module": "Give the PKCS#11 module.",
-    "err_tl_file": "No such trust-list file"
+    "err_tl_file": "No such trust-list file",
+    "ca_records": "Records"
   }
 }

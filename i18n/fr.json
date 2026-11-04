@@ -569,6 +569,7 @@
     "err_out_dir": "Indiquez le dossier des exécutions.",
     "err_ca_folder": "Indiquez le dossier de l'AC.",
     "err_module": "Indiquez le module PKCS#11.",
-    "err_tl_file": "Fichier de liste de confiance introuvable"
+    "err_tl_file": "Fichier de liste de confiance introuvable",
+    "ca_records": "Enregistrements"
   }
 }

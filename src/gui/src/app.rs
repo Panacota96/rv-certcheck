@@ -1048,21 +1048,28 @@ impl HashInvApp {
                 .show(ui, |ui| {
                     if let Some(n) = view.selected_node() {
                         ui.label(egui::RichText::new(t("fields")).strong().color(CYAN));
+                        let value_w = (ui.available_width() - 150.0).max(120.0);
                         egui::Grid::new("fields-grid")
                             .num_columns(2)
                             .striped(true)
                             .spacing([10.0, 3.0])
+                            .max_col_width(value_w)
                             .show(ui, |ui| {
                                 for (k, v) in cert_fields(&n.cert) {
                                     ui.label(egui::RichText::new(t(k)).size(11.5).weak());
-                                    ui.label(egui::RichText::new(v).size(11.5).monospace());
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(v).size(11.5).monospace(),
+                                        )
+                                        .wrap_mode(egui::TextWrapMode::Wrap),
+                                    );
                                     ui.end_row();
                                 }
                             });
                     }
                     if !view.certificate_text.is_empty() {
                         egui::CollapsingHeader::new("certificate.txt")
-                            .default_open(false)
+                            .default_open(true)
                             .show(ui, |ui| {
                                 let mut txt = view.certificate_text.clone();
                                 ui.add(
@@ -1120,7 +1127,7 @@ impl HashInvApp {
                 ui,
                 &mut self.state.create.ca_entry,
                 &t("ca_folder_hint"),
-                280.0,
+                400.0,
             );
             if let Some(d) = browse(ui, &t("browse"), true) {
                 self.state.create.ca_entry = d.display().to_string();
@@ -1192,7 +1199,7 @@ impl HashInvApp {
                                 .collect::<Vec<_>>()
                                 .join(", "),
                         ),
-                        ("records", v.records.to_string()),
+                        ("ca_records", v.records.to_string()),
                         ("f_sha256", f.certificate_sha256.clone()),
                     ];
                     for (k, val) in rows {

@@ -257,6 +257,18 @@ pub fn parse_subject(dn: &str, sans: &str) -> Result<SubjectSpec, String> {
     Ok(SubjectSpec { rdns, sans: out })
 }
 
+/// `<dir>/<stem>.<ext>`, or `<stem>-2.<ext>`, `-3`… when taken (key files are never overwritten, and two
+/// certificates can be issued in the same second).
+fn free_name(dir: &Path, stem: &str, ext: &str) -> PathBuf {
+    let mut p = dir.join(format!("{stem}.{ext}"));
+    let mut n = 2;
+    while p.exists() {
+        p = dir.join(format!("{stem}-{n}.{ext}"));
+        n += 1;
+    }
+    p
+}
+
 fn days(s: &str, c: &Catalog) -> Result<u32, String> {
     s.trim()
         .parse::<u32>()
@@ -1329,14 +1341,14 @@ impl CreateState {
                     f.key.wipe();
                     None
                 } else {
-                    Some(
-                        f.key.take_target(
-                            ca_dir
-                                .join("subjects")
-                                .join(format!("{}-{stamp}.key.p8", f.profile.name())),
-                            f.profile.name(),
+                    Some(f.key.take_target(
+                        free_name(
+                            &ca_dir.join("subjects"),
+                            &format!("{}-{stamp}", f.profile.name()),
+                            "key.p8",
                         ),
-                    )
+                        f.profile.name(),
+                    ))
                 };
                 let p12_password =
                     (f.profile == IssueProfile::Examiner).then(|| f.p12_password.take());

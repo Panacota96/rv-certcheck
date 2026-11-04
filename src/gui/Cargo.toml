@@ -26,5 +26,11 @@ zeroize.workspace = true
 [target.'cfg(windows)'.dependencies]
 rfd.workspace = true
 
+# Icon + version details in the Windows .exe (build.rs; does nothing on other platforms).
+[build-dependencies]
+winresource = "0.1"
+
 [dev-dependencies]
 tempfile.workspace = true
+# The headless screenshot example writes PNGs (docs/images/gui-*.png).
+png = "0.18"
