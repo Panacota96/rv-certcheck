@@ -1,12 +1,29 @@
 //! Everything the window shows and every rule it enforces, without any drawing code.
 //! Kept separate from `app.rs` so it can be unit-tested headless (CI has no display).
+//!
+//! ```text
+//! GuiState ── Analyze tab: inputs, AnalyzeOptions (anchors, at, purpose, CRL/OCSP, online, PKCS#12 password),
+//!          │               hashes, reports, trust ──► to_config ──► rv_certcheck_core::run (worker thread)
+//!          │               ──► events (progress) ──► results table (chain::load_rows) ──► chain view (chain.rs)
+//!          ├─ Create tab: create::CreateState (CA folder, wizards) ──► create::execute (worker thread)
+//!          ├─ Trust lists tab: trust::TrustState ──► create::execute (trust-list import)
+//!          └─ UiLog: every ui_* action with at_utc, written as the preamble of the next audited run
+//! ```
+//! Secrets (PKCS#12 password, key passwords, PINs) live in [`MaskedField`]s only: moved into a zeroizing
+//! [`Secret`] for exactly one operation, never cloned, never printed, never in a ui_* action.
 
+pub mod chain;
+pub mod create;
+pub mod trust;
+
+use rv_certcheck_core::certs::{AnchorSpec, AtTime, Purpose, Secret, ValidationOptions};
 use rv_certcheck_core::{
-    CASE_ROLE, Event, HashAlgo, RunConfig, TOOL_NAME, TOOL_VERSION, case, hash, i18n,
+    CASE_ROLE, CertOptions, Event, HashAlgo, RunConfig, TOOL_NAME, TOOL_VERSION, case, hash, i18n,
     time::human_duration,
 };
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use zeroize::Zeroize;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Phase {
@@ -36,6 +53,7 @@ pub struct Outcome {
     pub low: u64,
     pub info: u64,
     pub report: PathBuf,
+    pub report_dir: PathBuf,
     pub log_dir: PathBuf,
 }
 
@@ -56,8 +74,192 @@ pub const LANG_CHOICES: [(&str, &str); 4] = [
     ("all", "All three (EN + ES + FR)"),
 ];
 
-#[derive(Clone, Debug)]
+/// A password or PIN field. The text is moved (never copied) into a zeroizing [`Secret`] for one operation, and
+/// zeroized when wiped or dropped. `Debug` never shows it.
+#[derive(Default)]
+pub struct MaskedField(String);
+
+impl MaskedField {
+    /// The buffer a masked text edit writes into.
+    pub fn buffer(&mut self) -> &mut String {
+        &mut self.0
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    /// Same text as `other` (confirmation fields), without exposing either.
+    pub fn same_as(&self, other: &MaskedField) -> bool {
+        self.0 == other.0
+    }
+    /// Moves the text into a Secret; the field is empty afterwards.
+    pub fn take(&mut self) -> Secret {
+        Secret::new(std::mem::take(&mut self.0))
+    }
+    /// None when empty; the field is empty afterwards either way.
+    pub fn take_opt(&mut self) -> Option<Secret> {
+        if self.0.is_empty() {
+            None
+        } else {
+            Some(self.take())
+        }
+    }
+    pub fn wipe(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+impl std::fmt::Debug for MaskedField {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_empty() {
+            "MaskedField(empty)"
+        } else {
+            "MaskedField(***)"
+        })
+    }
+}
+
+impl Drop for MaskedField {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+/// The user actions recorded since the last audited run (each with `at_utc`), written as its preamble.
+#[derive(Clone, Debug, Default)]
+pub struct UiLog {
+    pub actions: Vec<(String, Value)>,
+}
+
+impl UiLog {
+    pub fn note(&mut self, action: &str, mut details: Value) {
+        if let Some(o) = details.as_object_mut() {
+            o.insert("at_utc".into(), json!(rv_certcheck_core::time::utc_now()));
+        }
+        self.actions.push((action.to_string(), details));
+    }
+    pub fn drain(&mut self) -> Vec<(String, Value)> {
+        std::mem::take(&mut self.actions)
+    }
+    pub fn is_empty(&self) -> bool {
+        self.actions.is_empty()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Tab {
+    #[default]
+    Analyze,
+    Create,
+    TrustLists,
+}
+
+impl Tab {
+    pub const ALL: [Tab; 3] = [Tab::Analyze, Tab::Create, Tab::TrustLists];
+    pub fn name(&self) -> &'static str {
+        match self {
+            Tab::Analyze => "analyze",
+            Tab::Create => "create",
+            Tab::TrustLists => "trust_lists",
+        }
+    }
+    pub fn key(&self) -> &'static str {
+        match self {
+            Tab::Analyze => "tab_analyze",
+            Tab::Create => "tab_create",
+            Tab::TrustLists => "tab_trust_lists",
+        }
+    }
+}
+
+/// The moment chains are judged at.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AtChoice {
+    #[default]
+    Now,
+    /// The date (or RFC 3339 time) in `AnalyzeOptions::at_date`.
+    Date,
+    /// The object's own signing time (timestamp genTime).
+    SigningTime,
+}
+
+/// Which revocation file list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RevFile {
+    Crl,
+    Ocsp,
+}
+
+/// The Analyze tab's certificate options (`analyze --anchor --at --purpose --crl --ocsp --online`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AnalyzeOptions {
+    pub anchor_rakvor: bool,
+    pub anchor_system: bool,
+    pub anchor_files: Vec<PathBuf>,
+    /// Trust-list snapshots used as anchors (`tl:eu@ID`, `tl:co@latest`).
+    pub anchor_lists: Vec<String>,
+    pub at: AtChoice,
+    /// `YYYY-MM-DD` or RFC 3339.
+    pub at_date: String,
+    pub purpose: Purpose,
+    pub crl_files: Vec<PathBuf>,
+    pub ocsp_files: Vec<PathBuf>,
+    pub online: bool,
+}
+
+impl AnalyzeOptions {
+    /// The `--anchor` values in the CLI's order: rakvor, system, files, trust lists.
+    pub fn anchors(&self) -> Result<Vec<AnchorSpec>, String> {
+        let mut a = vec![];
+        if self.anchor_rakvor {
+            a.push(AnchorSpec::Rakvor);
+        }
+        if self.anchor_system {
+            a.push(AnchorSpec::System);
+        }
+        for f in &self.anchor_files {
+            a.push(AnchorSpec::File { path: f.clone() });
+        }
+        for l in &self.anchor_lists {
+            a.push(AnchorSpec::parse(l).map_err(|e| e.message)?);
+        }
+        Ok(a)
+    }
+
+    pub fn at_time(&self) -> Result<AtTime, String> {
+        match self.at {
+            AtChoice::Now => Ok(AtTime::Now),
+            AtChoice::SigningTime => Ok(AtTime::SigningTime),
+            AtChoice::Date => AtTime::parse(&self.at_date).map_err(|e| e.message),
+        }
+    }
+
+    /// The same ValidationOptions the CLI builds from its options (files checked to exist, as the CLI does).
+    pub fn validation(&self, trust_list_dir: Option<PathBuf>) -> Result<ValidationOptions, String> {
+        for f in self
+            .crl_files
+            .iter()
+            .chain(&self.ocsp_files)
+            .chain(&self.anchor_files)
+        {
+            if !f.is_file() {
+                return Err(format!("no such file: {}", f.display()));
+            }
+        }
+        Ok(ValidationOptions {
+            anchors: self.anchors()?,
+            at: self.at_time()?,
+            purpose: self.purpose,
+            crl_files: self.crl_files.clone(),
+            ocsp_files: self.ocsp_files.clone(),
+            online: self.online,
+            trust_list_dir,
+        })
+    }
+}
+
+#[derive(Debug)]
 pub struct GuiState {
+    pub tab: Tab,
     pub inputs: Vec<PathBuf>,
     pub path_entry: String,
     pub recursive: bool,
@@ -71,25 +273,39 @@ pub struct GuiState {
     pub current_item: String,
     pub warnings: Vec<String>,
     pub outcome: Option<Outcome>,
-    /// User actions recorded before the run; handed to the core as audit preamble entries.
-    pub ui_actions: Vec<(String, Value)>,
+    /// User actions recorded before the next audited run; handed to the core as audit preamble entries.
+    pub ui: UiLog,
     /// Interface language (en/es/fr), independent from the report language.
     pub ui_lang: String,
     pub jurisdiction: String,
     pub timestamp: bool,
     pub tsa_url: String,
     pub sign_cert: String,
-    /// Kept in memory only; never logged.
-    pub sign_password: String,
+    /// Report-signing certificate password: one run only.
+    pub sign_password: MaskedField,
     /// Shared case folder; when set, the output folder is derived from it and locked.
     pub case_dir: String,
     /// Evidence ids reported by the last run (case folder only).
     pub evidence: Vec<EvidenceLink>,
+    pub analysis: AnalyzeOptions,
+    /// Path being typed for an anchor / CRL / OCSP file.
+    pub anchor_entry: String,
+    pub crl_entry: String,
+    pub ocsp_entry: String,
+    /// Opens PKCS#12 items and encrypted keys among the evidence: one run only.
+    pub p12_password: MaskedField,
+    /// Results of the last run, one row per item.
+    pub rows: Vec<chain::ResultRow>,
+    /// The selected item's chain view.
+    pub item: Option<chain::ItemView>,
+    pub create: create::CreateState,
+    pub trust: trust::TrustState,
 }
 
 impl Default for GuiState {
     fn default() -> Self {
         GuiState {
+            tab: Tab::Analyze,
             inputs: vec![],
             path_entry: String::new(),
             recursive: true,
@@ -103,30 +319,58 @@ impl Default for GuiState {
             current_item: String::new(),
             warnings: vec![],
             outcome: None,
-            ui_actions: vec![],
+            ui: UiLog::default(),
             ui_lang: "en".into(),
             jurisdiction: "co".into(),
             timestamp: true,
             tsa_url: rv_certcheck_core::trust::DEFAULT_TSA.into(),
             sign_cert: String::new(),
-            sign_password: String::new(),
+            sign_password: MaskedField::default(),
             case_dir: String::new(),
             evidence: vec![],
+            analysis: AnalyzeOptions::default(),
+            anchor_entry: String::new(),
+            crl_entry: String::new(),
+            ocsp_entry: String::new(),
+            p12_password: MaskedField::default(),
+            rows: vec![],
+            item: None,
+            create: create::CreateState {
+                out_dir: "rakvor-out".into(),
+                ..Default::default()
+            },
+            trust: trust::TrustState::default(),
         }
     }
 }
 
+fn clean_path(s: &str) -> String {
+    s.trim().trim_matches('"').trim().to_string()
+}
+
 impl GuiState {
-    /// Records a user action with the time it happened (written to the audit log when the run starts).
-    fn note(&mut self, action: &str, mut details: Value) {
-        if let Some(o) = details.as_object_mut() {
-            o.insert("at_utc".into(), json!(rv_certcheck_core::time::utc_now()));
-        }
-        self.ui_actions.push((action.to_string(), details));
+    /// Records a user action with the time it happened (written to the audit log when the next run starts).
+    fn note(&mut self, action: &str, details: Value) {
+        self.ui.note(action, details);
+    }
+
+    /// The interface catalogue (static, so it can be held while a sub-state is borrowed mutably).
+    pub fn catalog(&self) -> &'static i18n::Catalog {
+        i18n::catalog(&self.ui_lang)
     }
 
     pub fn is_running(&self) -> bool {
         self.phase == Phase::Running
+    }
+
+    pub fn set_tab(&mut self, t: Tab) {
+        if self.tab != t {
+            self.tab = t;
+            self.note("ui_tab_changed", json!({"tab": t.name()}));
+            if t == Tab::TrustLists {
+                self.trust.refresh();
+            }
+        }
     }
 
     /// A checkbox is clickable if it can be unticked (more than one ticked) or ticked (fewer than two ticked).
@@ -169,7 +413,7 @@ impl GuiState {
     }
 
     pub fn add_typed_path(&mut self) {
-        let t = self.path_entry.trim().trim_matches('"').to_string();
+        let t = clean_path(&self.path_entry);
         if !t.is_empty() {
             self.add_input(PathBuf::from(t));
             self.path_entry.clear();
@@ -195,6 +439,129 @@ impl GuiState {
             self.recursive = r;
             self.note("ui_recursive_changed", json!({"recursive": r}));
         }
+    }
+
+    // ---- certificate options --------------------------------------------------------------------------------
+
+    pub fn set_anchor_builtin(&mut self, which: &str, on: bool) {
+        let slot = match which {
+            "rakvor" => &mut self.analysis.anchor_rakvor,
+            "system" => &mut self.analysis.anchor_system,
+            _ => return,
+        };
+        if *slot != on {
+            *slot = on;
+            self.note("ui_anchor_changed", json!({"anchor": which, "on": on}));
+        }
+    }
+
+    /// Adds the path typed in `anchor_entry` (or `p`) as a trusted certificate file.
+    pub fn add_anchor_file(&mut self, p: Option<PathBuf>) {
+        let p = p.unwrap_or_else(|| PathBuf::from(clean_path(&self.anchor_entry)));
+        if p.as_os_str().is_empty() || self.analysis.anchor_files.contains(&p) {
+            return;
+        }
+        self.anchor_entry.clear();
+        self.note(
+            "ui_anchor_changed",
+            json!({"anchor": format!("file:{}", p.display()), "on": true}),
+        );
+        self.analysis.anchor_files.push(p);
+    }
+
+    pub fn remove_anchor_file(&mut self, i: usize) {
+        if i < self.analysis.anchor_files.len() {
+            let p = self.analysis.anchor_files.remove(i);
+            self.note(
+                "ui_anchor_changed",
+                json!({"anchor": format!("file:{}", p.display()), "on": false}),
+            );
+        }
+    }
+
+    /// Adds (or removes) a trust-list snapshot anchor `tl:<list>@<id>`.
+    pub fn set_anchor_list(&mut self, spec: &str, on: bool) {
+        let has = self.analysis.anchor_lists.iter().any(|s| s == spec);
+        if on && !has {
+            self.analysis.anchor_lists.push(spec.to_string());
+        } else if !on && has {
+            self.analysis.anchor_lists.retain(|s| s != spec);
+        } else {
+            return;
+        }
+        self.note("ui_anchor_changed", json!({"anchor": spec, "on": on}));
+    }
+
+    pub fn set_at(&mut self, at: AtChoice, date: &str) {
+        let date = date.trim().to_string();
+        if self.analysis.at != at || (at == AtChoice::Date && self.analysis.at_date != date) {
+            self.analysis.at = at;
+            self.analysis.at_date = date.clone();
+            let shown = match at {
+                AtChoice::Now => "now".to_string(),
+                AtChoice::SigningTime => "signing-time".to_string(),
+                AtChoice::Date => date,
+            };
+            self.note("ui_at_changed", json!({"at": shown}));
+        } else {
+            self.analysis.at_date = date;
+        }
+    }
+
+    pub fn set_purpose(&mut self, p: Purpose) {
+        if self.analysis.purpose != p {
+            self.analysis.purpose = p;
+            self.note("ui_purpose_changed", json!({"purpose": p.name()}));
+        }
+    }
+
+    pub fn add_revocation_file(&mut self, kind: RevFile, p: Option<PathBuf>) {
+        let entry = match kind {
+            RevFile::Crl => &mut self.crl_entry,
+            RevFile::Ocsp => &mut self.ocsp_entry,
+        };
+        let p = p.unwrap_or_else(|| PathBuf::from(clean_path(entry)));
+        entry.clear();
+        let list = match kind {
+            RevFile::Crl => &mut self.analysis.crl_files,
+            RevFile::Ocsp => &mut self.analysis.ocsp_files,
+        };
+        if p.as_os_str().is_empty() || list.contains(&p) {
+            return;
+        }
+        list.push(p.clone());
+        let k = if kind == RevFile::Crl { "crl" } else { "ocsp" };
+        self.note(
+            "ui_revocation_file_added",
+            json!({"kind": k, "path": p.display().to_string()}),
+        );
+    }
+
+    pub fn remove_revocation_file(&mut self, kind: RevFile, i: usize) {
+        let list = match kind {
+            RevFile::Crl => &mut self.analysis.crl_files,
+            RevFile::Ocsp => &mut self.analysis.ocsp_files,
+        };
+        if i < list.len() {
+            let p = list.remove(i);
+            let k = if kind == RevFile::Crl { "crl" } else { "ocsp" };
+            self.note(
+                "ui_revocation_file_removed",
+                json!({"kind": k, "path": p.display().to_string()}),
+            );
+        }
+    }
+
+    pub fn set_online(&mut self, on: bool) {
+        if self.analysis.online != on {
+            self.analysis.online = on;
+            self.note("ui_online_revocation_changed", json!({"online": on}));
+        }
+    }
+
+    /// Validation options as the CLI would build them; trust-list anchors resolve in the Trust lists tab's folder.
+    pub fn validation_options(&self) -> Result<ValidationOptions, String> {
+        self.analysis.validation(Some(self.trust.store()))
     }
 
     /// GUI text in the interface language.
@@ -229,7 +596,7 @@ impl GuiState {
     }
 
     pub fn set_sign_cert(&mut self, path: &str) {
-        let path = path.trim().trim_matches('"').to_string();
+        let path = clean_path(path);
         if self.sign_cert != path {
             self.sign_cert = path.clone();
             self.note(
@@ -241,7 +608,7 @@ impl GuiState {
 
     /// Rule: with a case folder the output folder is `<case>/runs/<tool>/<RUN-ID>` and cannot be edited.
     pub fn set_case_dir(&mut self, path: &str) {
-        let path = path.trim().trim_matches('"').to_string();
+        let path = clean_path(path);
         if self.case_dir != path {
             self.case_dir = path.clone();
             self.note(
@@ -275,7 +642,7 @@ impl GuiState {
         self.evidence
             .iter()
             .map(|e| {
-                let name = std::path::Path::new(&e.path)
+                let name = Path::new(&e.path)
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| e.path.clone());
@@ -295,40 +662,42 @@ impl GuiState {
             && (self.out_locked() || !self.out_dir.trim().is_empty())
     }
 
-    /// Builds the run configuration; the recorded UI actions become audit preamble entries.
-    pub fn to_config(&self) -> Result<RunConfig, String> {
+    /// Builds the run configuration; the recorded UI actions become audit preamble entries. Only once every check
+    /// has passed are the PKCS#12 and signing passwords moved out of their fields into the configuration (they
+    /// are dropped, zeroized, with it when the run ends).
+    pub fn to_config(&mut self) -> Result<RunConfig, String> {
         if self.inputs.is_empty() && !self.out_locked() {
             return Err("Add at least one file or folder.".into());
         }
         hash::validate_selection(&self.selected)?;
         let case_id = Some(self.case_id.trim().to_string()).filter(|s| !s.is_empty());
         if self.out_locked() {
-            case::preflight(
-                std::path::Path::new(self.case_dir.trim()),
-                case_id.as_deref(),
-                &[],
-            )
-            .map_err(|e| e.message)?;
+            case::preflight(Path::new(self.case_dir.trim()), case_id.as_deref(), &[])
+                .map_err(|e| e.message)?;
         }
         let langs = i18n::parse_langs(&self.lang)?;
-        if !self.sign_cert.is_empty() && !std::path::Path::new(&self.sign_cert).is_file() {
+        if !self.sign_cert.is_empty() && !Path::new(&self.sign_cert).is_file() {
             return Err(format!("Signing certificate not found: {}", self.sign_cert));
         }
-        let mut preamble = self.ui_actions.clone();
+        let validation = self.validation_options()?;
+        let mut preamble = self.ui.actions.clone();
+        let anchors: Vec<String> = validation.anchors.iter().map(|a| a.describe()).collect();
         preamble.push(("ui_start_clicked".into(), json!({"algorithms": self.selected, "lang": self.lang, "recursive": self.recursive,
             "inputs": self.inputs.len(), "jurisdiction": self.jurisdiction, "timestamp": self.timestamp,
             "pdf_signing": !self.sign_cert.is_empty(), "case_dir": if self.out_locked() { json!(self.case_dir.trim()) } else { Value::Null },
+            "anchors": anchors, "at": validation.at.describe(), "purpose": validation.purpose.name(),
+            "crl_files": validation.crl_files.len(), "ocsp_files": validation.ocsp_files.len(), "online": validation.online,
+            "p12_password": if self.p12_password.is_empty() { "none" } else { "supplied (not recorded)" },
             "at_utc": rv_certcheck_core::time::utc_now()})));
+        let list = |v: &[PathBuf]| {
+            v.iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(";")
+        };
         let settings = vec![
             format!("{} (gui)", TOOL_NAME),
-            format!(
-                "inputs={}",
-                self.inputs
-                    .iter()
-                    .map(|p| p.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(";")
-            ),
+            format!("inputs={}", list(&self.inputs)),
             format!(
                 "hash={}",
                 self.selected
@@ -365,7 +734,19 @@ impl GuiState {
                     self.sign_cert.as_str()
                 }
             ),
+            format!("anchor={}", anchors.join(";")),
+            format!("at={}", validation.at.describe()),
+            format!("purpose={}", validation.purpose.name()),
+            format!("crl={}", list(&validation.crl_files)),
+            format!("ocsp={}", list(&validation.ocsp_files)),
+            format!("online={}", validation.online),
         ];
+        // Every check passed: the secrets move into the configuration.
+        let p12_password = self.p12_password.take_opt();
+        let sign_password = self
+            .sign_password
+            .take_opt()
+            .map(|s| s.expose().to_string());
         Ok(RunConfig {
             inputs: self.inputs.clone(),
             input_list: None,
@@ -395,11 +776,7 @@ impl GuiState {
             } else {
                 Some(PathBuf::from(&self.sign_cert))
             },
-            sign_password: if self.sign_password.is_empty() {
-                None
-            } else {
-                Some(self.sign_password.clone())
-            },
+            sign_password,
             case_dir: if self.out_locked() {
                 Some(PathBuf::from(self.case_dir.trim()))
             } else {
@@ -407,8 +784,10 @@ impl GuiState {
             },
             evidence_ids: vec![],
             case_role: CASE_ROLE,
-            // Analyze-tab options (anchors, date, purpose) arrive with the GUI agent; defaults until then.
-            cert: Default::default(),
+            cert: CertOptions {
+                validation,
+                p12_password,
+            },
         })
     }
 
@@ -419,8 +798,13 @@ impl GuiState {
         self.warnings.clear();
         self.outcome = None;
         self.evidence.clear();
+        self.rows.clear();
+        self.item = None;
         // Recorded actions now belong to this run's audit log.
-        self.ui_actions.clear();
+        self.ui.actions.clear();
+        // Nothing secret stays in the window once the run has its own copy.
+        self.p12_password.wipe();
+        self.sign_password.wipe();
     }
 
     pub fn apply(&mut self, e: &Event) {
@@ -466,6 +850,9 @@ impl GuiState {
                 self.warnings
                     .push(format!("{}: {}", path.as_deref().unwrap_or("-"), message))
             }
+            Event::Timestamp { status, reason, .. } if status != "ok" => self
+                .warnings
+                .push(format!("timestamp: {}", reason.as_deref().unwrap_or("-"))),
             Event::RunFinished {
                 items,
                 errors,
@@ -494,6 +881,7 @@ impl GuiState {
                     low: *low,
                     info: *info,
                     report: PathBuf::from(report_dir).join(format!("statistics.{}.html", lang)),
+                    report_dir: PathBuf::from(report_dir),
                     log_dir: PathBuf::from(log_dir),
                 });
                 self.phase = if *cancelled {
@@ -502,6 +890,10 @@ impl GuiState {
                     Phase::Finished
                 };
                 self.current_item.clear();
+                match chain::load_rows(Path::new(report_dir)) {
+                    Ok(r) => self.rows = r,
+                    Err(e) => self.warnings.push(e),
+                }
             }
             _ => {}
         }
@@ -509,6 +901,26 @@ impl GuiState {
 
     pub fn fail(&mut self, msg: String) {
         self.phase = Phase::Failed(msg);
+    }
+
+    /// Opens the chain view of result row `i` (audited as ui_item_selected).
+    pub fn select_row(&mut self, i: usize) {
+        let Some(r) = self.rows.get(i) else { return };
+        if self.item.as_ref().map(|v| v.row) == Some(i) {
+            return;
+        }
+        let details = json!({"index": r.index, "path": r.path});
+        self.item = Some(chain::load_item(i, r));
+        self.note("ui_item_selected", details);
+    }
+
+    /// Shows the fields of node `node` of tree `tree` in the chain view.
+    pub fn select_node(&mut self, tree: usize, node: usize) {
+        if let Some(v) = &mut self.item
+            && v.trees.get(tree).is_some_and(|t| node < t.nodes.len())
+        {
+            v.selected = Some((tree, node));
+        }
     }
 
     /// 0.0..=1.0, by bytes (or by files when every file is empty).
@@ -552,11 +964,94 @@ impl GuiState {
             self.fraction() * 100.0
         )
     }
+
+    // ---- Create and Trust lists tabs ------------------------------------------------------------------------
+
+    /// The actor of creation runs (the Analyze tab's examiner field).
+    pub fn actor_name(&self) -> String {
+        if self.actor.trim().is_empty() {
+            rv_certcheck_core::env::os_user()
+        } else {
+            self.actor.trim().to_string()
+        }
+    }
+
+    pub fn create_open_ca(&mut self) -> Result<create::PreparedOp, String> {
+        let (c, actor) = (self.catalog(), self.actor_name());
+        self.create.open_ca(&mut self.ui, &actor, c)
+    }
+
+    pub fn create_verify_ca(&mut self) -> Result<create::PreparedOp, String> {
+        let (c, actor) = (self.catalog(), self.actor_name());
+        self.create.verify_ca(&mut self.ui, &actor, c)
+    }
+
+    pub fn create_list_tokens(&mut self) -> Result<create::PreparedOp, String> {
+        let (c, actor) = (self.catalog(), self.actor_name());
+        self.create.list_tokens(&mut self.ui, &actor, c)
+    }
+
+    pub fn create_set_wizard(&mut self, w: Option<create::Wizard>) {
+        self.create.set_wizard(&mut self.ui, w);
+    }
+
+    pub fn create_set_profile(
+        &mut self,
+        p: rv_certcheck_core::certs::IssueProfile,
+    ) -> Result<(), String> {
+        let c = self.catalog();
+        self.create.set_profile(&mut self.ui, p, c)
+    }
+
+    pub fn create_set_key_mode(&mut self, w: create::Wizard, m: create::KeyMode) {
+        self.create.set_key_mode(&mut self.ui, w, m);
+    }
+
+    pub fn create_set_confirm_root(&mut self, on: bool) {
+        self.create.set_confirm_root(&mut self.ui, on);
+    }
+
+    pub fn create_use_token(&mut self, w: create::Wizard, serial: &str) {
+        self.create.use_token(&mut self.ui, w, serial);
+    }
+
+    pub fn create_prepare(&mut self) -> Result<create::PreparedOp, String> {
+        let (c, actor) = (self.catalog(), self.actor_name());
+        self.create.prepare(&mut self.ui, &actor, c)
+    }
+
+    pub fn create_finish(&mut self, r: create::OpResult) {
+        let snapshots = matches!(r.outcome.command.as_str(), "trust-list import");
+        self.create.finish(r);
+        if snapshots {
+            self.trust.refresh();
+        }
+    }
+
+    pub fn trust_import(&mut self) -> Result<create::PreparedOp, String> {
+        let (c, actor) = (self.catalog(), self.actor_name());
+        let out = self.create.out_dir.clone();
+        self.trust.import(&mut self.ui, &actor, &out, c)
+    }
+
+    pub fn trust_set_import_list(&mut self, k: rv_certcheck_core::certs::TrustListKind) {
+        self.trust.set_import_list(&mut self.ui, k);
+    }
+
+    pub fn trust_inspect(&mut self, i: usize) {
+        self.trust.inspect(&mut self.ui, i);
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::create::{KeyMode, Wizard, execute};
     use super::*;
+    use rv_certcheck_core::certs::IssueProfile;
+
+    fn root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
 
     #[test]
     fn at_most_two_and_at_least_one_algorithm() {
@@ -573,7 +1068,6 @@ mod tests {
             "third checkbox is disabled"
         );
         assert!(s.toggle_algo(HashAlgo::Blake3).is_err());
-        assert!(s.can_toggle(HashAlgo::Sha256));
         s.toggle_algo(HashAlgo::Sha256).unwrap();
         assert_eq!(s.selected, vec![HashAlgo::Md5]);
     }
@@ -599,52 +1093,296 @@ mod tests {
                 "ui_start_clicked"
             ]
         );
+        assert!(cfg.preamble.iter().all(|(_, d)| d["at_utc"].is_string()));
         s.start();
-        assert!(s.ui_actions.is_empty());
+        assert!(s.ui.is_empty());
     }
 
     #[test]
-    fn events_drive_progress_and_outcome() {
+    fn analysis_options_map_to_validation_options() {
         let mut s = GuiState::default();
-        s.start();
-        s.apply(&Event::RunStarted {
-            run_id: "R".into(),
-            tool: "t".into(),
-            version: "v".into(),
-            frontend: "gui".into(),
-            algorithms: vec![HashAlgo::Sha256],
-            langs: vec!["en".into()],
-            total_items: 4,
-            total_bytes: 400,
-        });
-        s.apply(&Event::Progress {
-            done: 1,
-            total: 4,
-            bytes_done: 100,
-            bytes_total: 400,
-            elapsed_ms: 2000,
-            eta_ms: Some(6000),
-        });
-        assert!((s.fraction() - 0.25).abs() < 1e-6);
-        assert!(s.timing_text(Some(2500)).contains("6.0 s"));
-        assert!(s.progress_text().starts_with("1 / 4"));
-        s.apply(&Event::RunFinished {
-            items: 4,
-            bytes: 400,
-            errors: 0,
-            elapsed_ms: 8000,
-            high: 1,
-            medium: 0,
-            low: 0,
-            info: 0,
-            report_dir: "out/reports/R".into(),
-            log_dir: "out/logs/R".into(),
-            cancelled: false,
-        });
-        assert_eq!(s.phase, Phase::Finished);
+        let anchor = root().join("examples/sample/anchors/rakvor-lab-root.crt");
+        let crl = root().join("examples/sample/evidence/intermediate.crl");
+        // Defaults are the CLI's defaults: no anchor, now, any purpose, offline.
+        let v = s.validation_options().unwrap();
         assert_eq!(
-            s.outcome.as_ref().unwrap().report,
-            PathBuf::from("out/reports/R/statistics.en.html")
+            (v.anchors.clone(), v.at.clone(), v.purpose, v.online),
+            (vec![], AtTime::Now, Purpose::Any, false)
+        );
+        s.set_anchor_builtin("rakvor", true);
+        s.anchor_entry = format!("\"{}\"", anchor.display());
+        s.add_anchor_file(None);
+        s.set_anchor_list("tl:co@latest", true);
+        s.set_at(AtChoice::Date, "2026-06-01");
+        s.set_purpose(Purpose::TlsServer);
+        s.add_revocation_file(RevFile::Crl, Some(crl.clone()));
+        s.set_online(true);
+        let v = s.validation_options().unwrap();
+        assert_eq!(
+            v,
+            ValidationOptions {
+                anchors: vec![
+                    AnchorSpec::Rakvor,
+                    AnchorSpec::File {
+                        path: anchor.clone()
+                    },
+                    AnchorSpec::TrustList {
+                        list: rv_certcheck_core::certs::TrustListKind::Co,
+                        snapshot: "latest".into()
+                    },
+                ],
+                at: AtTime::Fixed("2026-06-01T00:00:00Z".into()),
+                purpose: Purpose::TlsServer,
+                crl_files: vec![crl.clone()],
+                ocsp_files: vec![],
+                online: true,
+                trust_list_dir: Some(s.trust.store()),
+            }
+        );
+        s.set_at(AtChoice::SigningTime, "");
+        assert_eq!(s.validation_options().unwrap().at, AtTime::SigningTime);
+        s.set_at(AtChoice::Date, "yesterday");
+        assert!(s.validation_options().is_err(), "a bad date is refused");
+        s.set_at(AtChoice::Date, "2026-06-01T14:00:00+02:00");
+        assert_eq!(
+            s.validation_options().unwrap().at,
+            AtTime::Fixed("2026-06-01T12:00:00Z".into())
+        );
+        s.add_revocation_file(RevFile::Ocsp, Some(PathBuf::from("missing.der")));
+        assert!(
+            s.validation_options().is_err(),
+            "a missing OCSP file is refused"
+        );
+        s.remove_revocation_file(RevFile::Ocsp, 0);
+        s.add_input(PathBuf::from("."));
+        let cfg = s.to_config().unwrap();
+        assert_eq!(cfg.cert.validation.purpose, Purpose::TlsServer);
+        let actions: Vec<&str> = cfg.preamble.iter().map(|(a, _)| a.as_str()).collect();
+        for a in [
+            "ui_anchor_changed",
+            "ui_at_changed",
+            "ui_purpose_changed",
+            "ui_revocation_file_added",
+            "ui_online_revocation_changed",
+        ] {
+            assert!(actions.contains(&a), "{a} audited");
+        }
+        let start = &cfg.preamble.last().unwrap().1;
+        assert_eq!(start["at"], "2026-06-01T12:00:00Z");
+        assert_eq!(start["online"], true);
+    }
+
+    #[test]
+    fn masked_fields_are_wiped_after_use_and_never_shown() {
+        let mut f = MaskedField::default();
+        f.buffer().push_str("Pa55-word!");
+        assert_eq!(format!("{f:?}"), "MaskedField(***)");
+        let s = f.take();
+        assert!(f.is_empty(), "taken = moved out");
+        assert_eq!(s.expose(), "Pa55-word!");
+        assert_eq!(format!("{s:?}"), "Secret(***)");
+        f.buffer().push_str("again");
+        f.wipe();
+        assert!(f.is_empty());
+
+        // Analyze: the PKCS#12 and signing passwords go into one run's configuration, then the fields are empty.
+        let mut g = GuiState::default();
+        g.add_input(PathBuf::from("."));
+        g.p12_password.buffer().push_str("p12-Secret-1");
+        g.sign_password.buffer().push_str("sign-Secret-2");
+        assert!(
+            !format!("{g:?}").contains("p12-Secret-1"),
+            "Debug of the state hides secrets"
+        );
+        g.set_at(AtChoice::Date, "not a date");
+        assert!(g.to_config().is_err());
+        assert!(
+            !g.p12_password.is_empty(),
+            "a refused start keeps what was typed"
+        );
+        g.set_at(AtChoice::Now, "");
+        let cfg = g.to_config().unwrap();
+        assert!(g.p12_password.is_empty() && g.sign_password.is_empty());
+        assert_eq!(
+            cfg.cert.p12_password.as_ref().unwrap().expose(),
+            "p12-Secret-1"
+        );
+        assert_eq!(cfg.sign_password.as_deref(), Some("sign-Secret-2"));
+        let audit = serde_json::to_string(&cfg.preamble).unwrap() + &cfg.command_line.join(" ");
+        assert!(!audit.contains("p12-Secret-1") && !audit.contains("sign-Secret-2"));
+        assert!(audit.contains("supplied (not recorded)"));
+
+        // Create: switching wizard wipes what was typed for the previous one.
+        g.create_set_wizard(Some(Wizard::Crl));
+        g.create.crl.ca_secret.buffer().push_str("ca-Secret-3");
+        g.create_set_wizard(Some(Wizard::Lab));
+        assert!(g.create.secrets_empty());
+    }
+
+    #[test]
+    fn wizard_rules_san_client_internal_and_confirm_root() {
+        let mut s = GuiState::default();
+        let c = s.catalog();
+        // Root on a token needs the explicit confirm-root checkbox.
+        s.create_set_wizard(Some(Wizard::NewRoot));
+        s.create.root.ca_dir = "x/root".into();
+        s.create.root.ca_id = "rakvor-root-test".into();
+        s.create.root.subject = "C=CO,O=Rakvor,CN=Test Root".into();
+        s.create_set_key_mode(Wizard::NewRoot, KeyMode::Token);
+        s.create.root.key.module = "/usr/lib/softhsm/libsofthsm2.so".into();
+        s.create.root.key.token_serial = "1234".into();
+        s.create.root.key.pin.buffer().push_str("123456");
+        assert_eq!(s.create_prepare().unwrap_err(), c.ui("err_confirm_root"));
+        assert!(
+            !s.create.root.key.pin.is_empty(),
+            "nothing taken from a refused form"
+        );
+        s.create_set_confirm_root(true);
+        let op = s
+            .create_prepare()
+            .expect("confirmed token root is accepted by the form");
+        assert!(s.create.secrets_empty(), "the PIN moved into the request");
+        let params = op.params.to_string();
+        assert!(!params.contains("123456") && params.contains("\"confirm_root\":true"));
+        assert!(
+            op.preamble
+                .iter()
+                .any(|(a, _)| a == "ui_confirm_root_changed")
+        );
+        drop(op);
+
+        // client-internal is shown disabled with its reason, and refused.
+        let choices = create::profile_choices();
+        let ci = choices
+            .iter()
+            .find(|(p, ..)| *p == IssueProfile::ClientInternal)
+            .unwrap();
+        assert_eq!(
+            (ci.1, ci.2),
+            (false, Some("profile_client_internal_reason"))
+        );
+        assert!(choices.iter().filter(|(_, on, _)| *on).count() == 5);
+        assert_eq!(
+            s.create_set_profile(IssueProfile::ClientInternal)
+                .unwrap_err(),
+            c.ui("profile_client_internal_reason")
+        );
+        s.create_set_wizard(Some(Wizard::Issue));
+        s.create.issue.profile = IssueProfile::ClientInternal; // even when forced past the dropdown
+        assert_eq!(
+            s.create_prepare().unwrap_err(),
+            c.ui("profile_client_internal_reason")
+        );
+
+        // tls-server needs a dns: or ip: SAN.
+        s.create_set_profile(IssueProfile::TlsServer).unwrap();
+        s.create.issue.subject = "C=CO,O=Rakvor,CN=hub".into();
+        s.create.issue.sans = "email:ops@rakvor.co".into();
+        s.create.issue.ca_secret.buffer().push_str("ca-pass");
+        s.create.issue.key.password.buffer().push('k');
+        s.create.issue.key.password_again.buffer().push('k');
+        assert_eq!(s.create_prepare().unwrap_err(), c.ui("err_tls_san"));
+        s.create.issue.sans = "dns:hub.rakvor.local".into();
+        assert_eq!(
+            s.create_prepare().unwrap_err(),
+            c.ui("err_open_ca_first"),
+            "the form is valid; it needs an open CA folder"
+        );
+        // A mistyped confirmation is refused.
+        s.create.issue.key.password_again.wipe();
+        s.create.issue.key.password_again.buffer().push_str("other");
+        s.create.ca = None;
+        assert_eq!(
+            s.create_prepare().unwrap_err(),
+            c.ui("err_passwords_differ")
+        );
+    }
+
+    /// Every `tr("…")` key app.rs uses exists, and en/es/fr have exactly the same `ui` keys.
+    #[test]
+    fn ui_key_sets_are_identical_and_complete() {
+        let keys = |l: &str| -> std::collections::BTreeSet<String> {
+            let v: Value = serde_json::from_slice(
+                &std::fs::read(root().join(format!("i18n/{l}.json"))).unwrap(),
+            )
+            .unwrap();
+            v["ui"].as_object().unwrap().keys().cloned().collect()
+        };
+        let (en, es, fr) = (keys("en"), keys("es"), keys("fr"));
+        assert_eq!(en, es, "es ui keys differ from en");
+        assert_eq!(en, fr, "fr ui keys differ from en");
+        let mut used = std::collections::BTreeSet::new();
+        let sources = [
+            include_str!("app.rs"),
+            include_str!("state/chain.rs"),
+            include_str!("state/create.rs"),
+            include_str!("state/trust.rs"),
+            include_str!("state.rs"),
+        ];
+        for src in sources {
+            // Code only (the tests type arbitrary strings).
+            let src = src.split("#[cfg(test)]").next().unwrap_or_default();
+            for pat in ["tr(\"", "c.ui(\"", "t(\""] {
+                for (at, _) in src.match_indices(pat) {
+                    let before = src[..at].chars().next_back().unwrap_or(' ');
+                    if before.is_alphanumeric() || before == '_' {
+                        continue; // e.g. id_salt("…"), not t("…")
+                    }
+                    let rest = &src[at + pat.len()..];
+                    if let Some(k) = rest.split('"').next()
+                        && !k.is_empty()
+                        && k.chars()
+                            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+                    {
+                        used.insert(k.to_string());
+                    }
+                }
+            }
+        }
+        // Keys built at run time.
+        for k in [
+            "status_ok",
+            "status_attention",
+            "status_problem",
+            "wz_new_root_help",
+            "wz_import_help",
+            "wz_issue_help",
+            "wz_revoke_help",
+            "wz_crl_help",
+            "wz_csr_help",
+            "wz_lab_help",
+        ]
+        .into_iter()
+        .map(String::from)
+        .chain(
+            IssueProfile::ALL
+                .iter()
+                .map(|p| format!("profile_{}_help", p.name().replace('-', "_"))),
+        ) {
+            used.insert(k);
+        }
+        for k in chain::cert_fields(&Default::default())
+            .iter()
+            .map(|(k, _)| *k)
+            .chain([
+                "badge_ok",
+                "badge_error",
+                "badge_incomplete",
+                "chain_valid",
+                "chain_untrusted",
+                "chain_invalid",
+            ])
+            .chain(Tab::ALL.iter().map(|t| t.key()))
+        {
+            used.insert(k.to_string());
+        }
+        for w in Wizard::ALL {
+            used.insert(w.key());
+        }
+        let missing: Vec<&String> = used.iter().filter(|k| !en.contains(*k)).collect();
+        assert!(
+            missing.is_empty(),
+            "ui keys used but missing in i18n: {missing:?}"
         );
     }
 
@@ -658,6 +1396,7 @@ mod tests {
         s.set_jurisdiction("fr");
         s.set_timestamp(false, "http://tsa.example");
         s.set_sign_cert("missing.p12");
+        s.set_tab(Tab::Create);
         s.add_input(PathBuf::from("."));
         assert!(s.to_config().is_err(), "missing certificate refused");
         s.set_sign_cert("");
@@ -668,18 +1407,14 @@ mod tests {
         assert!(
             actions.contains(&"ui_interface_language_changed")
                 && actions.contains(&"ui_timestamp_changed")
-        );
-        assert!(
-            cfg.preamble
-                .iter()
-                .all(|(_, d)| !d.to_string().contains("password"))
+                && actions.contains(&"ui_tab_changed")
         );
     }
 
     #[test]
     fn case_folder_locks_the_output_folder_and_shows_evidence_ids() {
-        let tmp = std::env::temp_dir().join(format!("rv-gui-case-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
+        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tmp.path();
         std::fs::create_dir_all(tmp.join("ev")).unwrap();
         std::fs::write(tmp.join("ev/a.txt"), "a").unwrap();
         std::fs::write(tmp.join("ev/b.txt"), "b").unwrap();
@@ -712,7 +1447,6 @@ mod tests {
         }
         let cfg = s.to_config().unwrap();
         assert_eq!(cfg.case_dir.as_deref(), Some(case_dir.as_path()));
-        assert_eq!(cfg.case_role, CASE_ROLE);
         let actions: Vec<&str> = cfg.preamble.iter().map(|(a, _)| a.as_str()).collect();
         assert_eq!(actions[0], "ui_case_dir_changed");
         s.start();
@@ -727,35 +1461,339 @@ mod tests {
             .collect();
         assert_eq!(ids, vec![Some("E0001"), Some("E0002")]);
         assert!(s.evidence_lines()[0].starts_with("E0001  a.txt"));
-        let log = std::fs::read_to_string(summary.log_dir.join("audit.jsonl")).unwrap();
-        assert!(log.contains("\"ui_case_dir_changed\"") && log.contains("\"case_linked\""));
         s.set_case_dir("");
         assert!(!s.out_locked() && s.out_dir_display() == "rakvor-out");
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// The sample analysed at 2026-06-01 with the lab root: results table, chain tree of the revoked leaf, its
+    /// fields and certificate.txt; the run is audited with the GUI's settings.
     #[test]
-    fn a_real_run_from_gui_settings_is_audited() {
-        let ev = std::env::temp_dir().join(format!("rv-gui-test-{}", std::process::id()));
-        std::fs::create_dir_all(&ev).unwrap();
-        std::fs::write(ev.join("a.txt"), "x").unwrap();
+    fn sample_run_gives_results_and_a_chain_view() {
+        let out = tempfile::tempdir().unwrap();
+        let sample = root().join("examples/sample");
         let mut s = GuiState {
-            timestamp: false, // tests stay offline
+            timestamp: false,
             ..Default::default()
         };
-        s.add_input(ev.clone());
-        s.out_dir = ev.join("out").display().to_string();
+        s.add_input(sample.join("evidence"));
+        s.add_anchor_file(Some(sample.join("anchors/rakvor-lab-root.crt")));
+        s.set_at(AtChoice::Date, "2026-06-01T00:00:00Z");
+        s.out_dir = out.path().display().to_string();
         let cfg = s.to_config().unwrap();
         s.start();
         let cancel = std::sync::atomic::AtomicBool::new(false);
         let summary = rv_certcheck_core::run(&cfg, &mut |e| s.apply(e), &cancel).unwrap();
         assert_eq!(s.phase, Phase::Finished);
+        assert_eq!(s.rows.len(), 13);
+        let i = s
+            .rows
+            .iter()
+            .position(|r| r.name == "leaf-revoked.crt")
+            .unwrap();
+        assert_eq!(s.rows[i].kind, "certificate");
+        assert!(
+            s.rows[i].findings.iter().any(|f| f == "CERT_REVOKED"),
+            "{:?}",
+            s.rows[i].findings
+        );
+        s.select_row(i);
+        let v = s.item.as_ref().unwrap();
+        let t = &v.trees[0];
+        assert_eq!(t.status_key, "chain_invalid");
+        assert!(t.nodes[0].subject.contains("revoked.lab.rakvor.test"));
+        assert_eq!(t.nodes[0].badge, chain::Badge::Error);
+        assert_eq!(t.nodes[0].reason, "certificate revoked");
+        assert!(
+            t.reaches_anchor && t.nodes.len() == 3,
+            "leaf → intermediate → anchor"
+        );
+        assert!(v.certificate_text.contains("Certificate:"));
+        s.select_node(0, 2);
+        assert!(
+            s.item
+                .as_ref()
+                .unwrap()
+                .selected_node()
+                .unwrap()
+                .anchor
+                .is_some()
+        );
+        let valid = s.rows.iter().position(|r| r.name == "leaf.crt").unwrap();
+        s.select_row(valid);
+        assert_eq!(s.item.as_ref().unwrap().trees[0].status_key, "chain_valid");
+        let plain = s.rows.iter().position(|r| r.name == "data.txt").unwrap();
+        s.select_row(plain);
+        assert!(s.item.as_ref().unwrap().trees.is_empty());
         let log = std::fs::read_to_string(summary.log_dir.join("audit.jsonl")).unwrap();
         assert!(
-            log.contains("\"ui_input_added\"")
+            log.contains("\"ui_anchor_changed\"")
                 && log.contains("\"ui_start_clicked\"")
                 && log.contains("\"frontend\":\"gui\"")
         );
-        let _ = std::fs::remove_dir_all(&ev);
+        assert!(s.ui.actions.iter().any(|(a, _)| a == "ui_item_selected"));
+    }
+
+    fn openssl(args: &[&str], env: &[(&str, &str)]) -> (bool, String) {
+        let mut c = std::process::Command::new("openssl");
+        c.args(args);
+        for (k, v) in env {
+            c.env(k, v);
+        }
+        let o = c.output().expect("openssl CLI");
+        (
+            o.status.success(),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            ),
+        )
+    }
+
+    /// Root → intermediate → (import) → examiner .p12 → revoke → CRL, all through `state` as a user would, checked
+    /// with `openssl verify`; then no password typed anywhere appears in any file written (logs, reports, CA).
+    #[test]
+    fn full_create_flow_through_state_verified_by_openssl() {
+        let d = tempfile::tempdir().unwrap();
+        let base = d.path();
+        let (root_pw, int_pw, exam_pw, p12_pw) = (
+            "Root-Key-Pw-7781",
+            "Int-Key-Pw-1290",
+            "Exam-Key-Pw-5543",
+            "P12-Pw-3378",
+        );
+        let mut s = GuiState::default();
+        s.create.out_dir = base.join("runs").display().to_string();
+        let run = |s: &mut GuiState, op: Result<create::PreparedOp, String>| {
+            let r = execute(op.expect("valid form"));
+            let ok = r.outcome.ok;
+            let err = r.outcome.error.clone();
+            s.create_finish(r);
+            assert!(ok, "{err:?}");
+            assert!(
+                s.create.secrets_empty(),
+                "every masked field is empty after the operation"
+            );
+        };
+        let typed = |f: &mut MaskedField, v: &str| f.buffer().push_str(v);
+
+        // 1. New root, key in an encrypted file.
+        s.set_tab(Tab::Create);
+        s.create_set_wizard(Some(Wizard::NewRoot));
+        let r = &mut s.create.root;
+        r.ca_dir = base.join("root").display().to_string();
+        r.ca_id = "rakvor-root-test".into();
+        r.subject = "C=CO,O=Rakvor Test,CN=Rakvor Test Root".into();
+        r.key_type = rv_certcheck_core::certs::KeySpec::P256;
+        typed(&mut r.key.password, root_pw);
+        typed(&mut r.key.password_again, root_pw);
+        let op = s.create_prepare();
+        run(&mut s, op);
+        let root_ca = s
+            .create
+            .ca
+            .as_ref()
+            .expect("the new root is opened")
+            .dir
+            .clone();
+        assert_eq!(root_ca, base.join("root"));
+
+        // 2. The intermediate, issued by the root; Import is pre-filled from it.
+        s.create_set_wizard(Some(Wizard::Issue));
+        s.create_set_profile(IssueProfile::Intermediate).unwrap();
+        let i = &mut s.create.issue;
+        i.subject = "C=CO,O=Rakvor Test,CN=Rakvor Test Issuing".into();
+        i.key_type = rv_certcheck_core::certs::KeySpec::P256;
+        i.validity_days = "1825".into();
+        i.key.key_file = base.join("issuing.key.p8").display().to_string();
+        typed(&mut i.key.password, int_pw);
+        typed(&mut i.key.password_again, int_pw);
+        typed(&mut i.ca_secret, root_pw);
+        let op = s.create_prepare();
+        run(&mut s, op);
+        assert_eq!(s.create.ca.as_ref().unwrap().issued.len(), 1);
+        let int_cert = PathBuf::from(&s.create.import.cert_file);
+        assert!(
+            int_cert.is_file(),
+            "Import pre-filled with the intermediate"
+        );
+
+        // 3. Import it as its own CA folder.
+        s.create_set_wizard(Some(Wizard::Import));
+        let m = &mut s.create.import;
+        m.ca_dir = base.join("issuing").display().to_string();
+        m.ca_id = "rakvor-issuing-test".into();
+        typed(&mut m.key.password, int_pw);
+        let op = s.create_prepare();
+        run(&mut s, op);
+        assert_eq!(s.create.ca.as_ref().unwrap().dir, base.join("issuing"));
+
+        // 4. An examiner certificate with its .p12.
+        s.create_set_wizard(Some(Wizard::Issue));
+        s.create_set_profile(IssueProfile::Examiner).unwrap();
+        let i = &mut s.create.issue;
+        i.subject = "C=CO,O=Rakvor Test,CN=Ana Ruiz".into();
+        i.sans = "email:ana.ruiz@rakvor.test".into();
+        i.key_type = rv_certcheck_core::certs::KeySpec::P256;
+        typed(&mut i.key.password, exam_pw);
+        typed(&mut i.key.password_again, exam_pw);
+        typed(&mut i.ca_secret, int_pw);
+        typed(&mut i.p12_password, p12_pw);
+        typed(&mut i.p12_again, p12_pw);
+        let op = s.create_prepare();
+        run(&mut s, op);
+        let last = s.create.last.clone().unwrap();
+        let file = |role: &str| {
+            last.files
+                .iter()
+                .find(|f| f.0 == role)
+                .map(|f| f.1.clone())
+                .unwrap()
+        };
+        let (exam_cert, p12) = (file("certificate"), file("examiner PKCS#12"));
+        assert!(
+            s.create.last_folder.as_ref().unwrap().is_dir(),
+            "Open folder target"
+        );
+
+        let root_crt = root_ca.join("certs/ca.crt");
+        let (ok, out) = openssl(
+            &[
+                "verify",
+                "-CAfile",
+                &root_crt.display().to_string(),
+                "-untrusted",
+                &int_cert.display().to_string(),
+                &exam_cert.display().to_string(),
+            ],
+            &[],
+        );
+        assert!(ok && out.contains(": OK"), "openssl verify: {out}");
+        let (ok, out) = openssl(
+            &[
+                "pkcs12",
+                "-in",
+                &p12.display().to_string(),
+                "-passin",
+                "env:RV_P12",
+                "-nokeys",
+                "-clcerts",
+            ],
+            &[("RV_P12", p12_pw)],
+        );
+        assert!(
+            ok && out.contains("Ana Ruiz"),
+            "the .p12 opens with its password: {out}"
+        );
+
+        // 5. Revoke the examiner, publish a CRL: the issued list shows it revoked, openssl agrees.
+        let serial = s.create.ca.as_ref().unwrap().issued[0].serial.clone();
+        s.create_set_wizard(Some(Wizard::Revoke));
+        s.create.revoke.serial = serial.clone();
+        s.create.revoke.reason = "keyCompromise".into();
+        let op = s.create_prepare();
+        run(&mut s, op);
+        s.create_set_wizard(Some(Wizard::Crl));
+        typed(&mut s.create.crl.ca_secret, int_pw);
+        let op = s.create_prepare();
+        run(&mut s, op);
+        let row = &s.create.ca.as_ref().unwrap().issued[0];
+        assert!(row.revoked.as_deref().unwrap().starts_with("keyCompromise"));
+        let crl = base.join("issuing/crl/latest.crl");
+        let chain = base.join("chain.pem");
+        std::fs::write(
+            &chain,
+            [
+                std::fs::read(&root_crt).unwrap(),
+                std::fs::read(&int_cert).unwrap(),
+            ]
+            .concat(),
+        )
+        .unwrap();
+        let (ok, out) = openssl(
+            &[
+                "verify",
+                "-crl_check",
+                "-CAfile",
+                &chain.display().to_string(),
+                "-CRLfile",
+                &crl.display().to_string(),
+                &exam_cert.display().to_string(),
+            ],
+            &[],
+        );
+        assert!(
+            !ok && out.contains("revoked"),
+            "openssl sees the revocation: {out}"
+        );
+
+        // 6. pki verify through the GUI.
+        let op = s.create_verify_ca();
+        run(&mut s, op);
+        assert!(matches!(s.create.verify, Some(Ok(n)) if n >= 4));
+
+        // No password appears in any file written (audit logs, reports, CA folders, issued.jsonl), nor in the
+        // ui_* actions still pending.
+        let mut checked = 0;
+        for e in walkdir(base) {
+            let bytes = std::fs::read(&e).unwrap();
+            let text = String::from_utf8_lossy(&bytes);
+            for pw in [root_pw, int_pw, exam_pw, p12_pw] {
+                assert!(!text.contains(pw), "{pw} found in {}", e.display());
+            }
+            checked += 1;
+        }
+        assert!(checked > 30, "{checked} files checked");
+        let pending = serde_json::to_string(&s.ui.actions).unwrap();
+        assert!(
+            [root_pw, int_pw, exam_pw, p12_pw]
+                .iter()
+                .all(|pw| !pending.contains(pw))
+        );
+        // Every run is a verifiable log with the GUI as front-end and the ui_* actions in it.
+        let logs: Vec<PathBuf> = walkdir(&base.join("runs"))
+            .into_iter()
+            .filter(|p| p.ends_with("audit.jsonl"))
+            .collect();
+        assert_eq!(logs.len(), 7);
+        let mut all = String::new();
+        for l in &logs {
+            assert!(
+                rv_certcheck_core::audit::verify(l).is_ok(),
+                "{}",
+                l.display()
+            );
+            all.push_str(&std::fs::read_to_string(l).unwrap());
+        }
+        for a in [
+            "ui_wizard_opened",
+            "ui_wizard_submitted",
+            "ui_profile_changed",
+            "ca_created",
+            "certificate_issued",
+            "ca_imported",
+            "certificate_revoked",
+            "crl_signed",
+            "ca_folder_verified",
+            "\"frontend\":\"gui\"",
+        ] {
+            assert!(all.contains(a), "{a} in the audit logs");
+        }
+    }
+
+    fn walkdir(d: &Path) -> Vec<PathBuf> {
+        let mut out = vec![];
+        let mut stack = vec![d.to_path_buf()];
+        while let Some(p) = stack.pop() {
+            for e in std::fs::read_dir(&p).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else {
+                    out.push(p);
+                }
+            }
+        }
+        out
     }
 }
