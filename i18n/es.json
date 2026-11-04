@@ -286,7 +286,8 @@
     "TRUST_LIST_SNAPSHOT_DATED": "Las listas de confianza se usan como instantáneas fechadas (fecha y SHA-256 registrados); los servicios añadidos, suspendidos o retirados después de la instantánea no se reflejan.",
     "TRUST_LIST_SIGNATURE_NOT_VERIFIED_V01": "En la versión 0.1 no se verifica la firma XAdES de la propia lista de confianza; se registran el origen y el SHA-256 de la instantánea para poder comprobarla de forma independiente. La lista colombiana es un archivo curado, porque ONAC no publica una lista legible por máquina.",
     "RAKVOR_CERTIFICATES_ARE_INTERNAL_USE": "Los certificados emitidos por la PKI interna de Rakvor son solo para uso interno: no constituyen una firma digital según el artículo 28 de la Ley 527 de 1999 (Colombia) ni son certificados cualificados según eIDAS (Reglamento (UE) n.º 910/2014).",
-    "NO_VALIDATED_ERROR_RATES_YET": "Los resultados de la herramienta se han comparado con OpenSSL y con implementaciones de referencia en Python sobre conjuntos de prueba, pero todavía no se ha medido una tasa de error sobre un corpus validado."
+    "NO_VALIDATED_ERROR_RATES_YET": "Los resultados de la herramienta se han comparado con OpenSSL y con implementaciones de referencia en Python sobre conjuntos de prueba, pero todavía no se ha medido una tasa de error sobre un corpus validado.",
+    "AT_SIGNING_TIME_TOKENS_ONLY_V01": "Se usó --at signing-time: en la v0.1 solo los sellos de tiempo (.tsr, .tst) tienen una hora de firma, su genTime, con la que se juzga la cadena de su propia TSA; los demás elementos aún no tienen hora de firma y sus cadenas se juzgaron en el momento actual (el at_source del veredicto indica signing-time-unavailable-now). Indique la fecha explícitamente con --at para juzgarlos en otro instante."
   },
   "brand": {
     "descriptor": "FORENSE | RESPUESTA A INCIDENTES | SEGURIDAD",

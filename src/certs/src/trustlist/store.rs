@@ -328,7 +328,12 @@ pub(crate) fn anchor_standing(
             status,
         };
         // Prefer explaining by the status of an accepted type over a type mismatch.
-        if first.is_none() || (kind_ok && first.as_ref().is_some_and(|f| f.service_type.contains("not accepted"))) {
+        if first.is_none()
+            || (kind_ok
+                && first
+                    .as_ref()
+                    .is_some_and(|f| f.service_type.contains("not accepted")))
+        {
             first = Some(w);
         }
     }

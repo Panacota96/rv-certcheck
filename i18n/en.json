@@ -286,7 +286,8 @@
     "TRUST_LIST_SNAPSHOT_DATED": "Trust lists are used as dated snapshots (date and SHA-256 recorded); services added, suspended or withdrawn after the snapshot are not reflected.",
     "TRUST_LIST_SIGNATURE_NOT_VERIFIED_V01": "In version 0.1 the trust list's own XAdES signature is not verified; the snapshot's source and SHA-256 are recorded so it can be checked independently. The Colombian list is a curated file, because ONAC publishes no machine-readable list.",
     "RAKVOR_CERTIFICATES_ARE_INTERNAL_USE": "Certificates issued by Rakvor's internal PKI are for internal use only: they are not a firma digital under Ley 527 de 1999, art. 28 (Colombia), and not qualified certificates under eIDAS (Regulation (EU) No 910/2014).",
-    "NO_VALIDATED_ERROR_RATES_YET": "The tool's results have been compared with OpenSSL and Python reference implementations on test sets, but no error rate has yet been measured on a validated corpus."
+    "NO_VALIDATED_ERROR_RATES_YET": "The tool's results have been compared with OpenSSL and Python reference implementations on test sets, but no error rate has yet been measured on a validated corpus.",
+    "AT_SIGNING_TIME_TOKENS_ONLY_V01": "--at signing-time was used: in v0.1 only timestamp tokens (.tsr, .tst) have a signing time, their genTime, which judges their own TSA chain; every other item has no signing time yet and its chains were judged now (the verdict's at_source says signing-time-unavailable-now). Give the date explicitly with --at to judge them at another instant."
   },
   "brand": {
     "descriptor": "FORENSICS | INCIDENT RESPONSE | SECURITY",

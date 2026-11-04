@@ -427,8 +427,12 @@ struct AnalyzeArgs {
     #[arg(long = "anchor", value_name = "ANCHOR", value_parser = parse_anchor, verbatim_doc_comment)]
     anchors: Vec<AnchorSpec>,
 
-    /// Instant the chains are judged at: now, signing-time (the token's or signature's time), a date
-    /// (YYYY-MM-DD, midnight UTC) or an RFC 3339 time.
+    /// Instant the chains are judged at: now, a date (YYYY-MM-DD, midnight UTC), an RFC 3339 time, or
+    /// signing-time. In v0.1 only a timestamp token (.tsr/.tst) has a signing time: its genTime, used for
+    /// its own TSA chain (which is always judged at genTime). Every other item has no signing time yet and
+    /// is judged now; the run's reports carry a note saying so. A token is checked against the evidence
+    /// file with the same stem in the run (data.tsr with data or data.*); without one it is not linked
+    /// to any file (imprint_checked=no).
     /// Default: now
     /// Example: --at 2025-03-14   or   --at 2025-03-14T09:30:00-05:00   or   --at signing-time
     #[arg(long, value_name = "WHEN", default_value = "now", value_parser = parse_at, verbatim_doc_comment, hide_default_value = true)]

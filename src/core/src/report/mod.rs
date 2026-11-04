@@ -23,6 +23,18 @@ pub const SCHEMA_SUMMARY: &str = "rakvor.item-summary/1";
 /// Run-level limitations, always printed (what this tool cannot tell you). Owned by the certificate layer's
 /// catalogue (`rv_certcheck_certs::codes::LIMITATIONS`), worded in i18n.
 pub const LIMITATIONS: &[&str] = rv_certcheck_certs::codes::LIMITATIONS;
+
+/// The limitations of this run: [`LIMITATIONS`] plus the run-level notes that apply to it
+/// ([`RunInfo::extra_limitations`], e.g. `AT_SIGNING_TIME_TOKENS_ONLY_V01` when `--at signing-time` was used).
+pub fn run_limitations(run: &RunInfo) -> Vec<&'static str> {
+    let mut v = LIMITATIONS.to_vec();
+    for l in &run.extra_limitations {
+        if !v.contains(l) {
+            v.push(l);
+        }
+    }
+    v
+}
 pub const SCHEMA_CUSTODY: &str = "rakvor.item-custody/1";
 const BLANK_TRANSFER_ROWS: usize = 6;
 
@@ -53,6 +65,9 @@ pub struct RunInfo {
     pub timestamp: Value,
     /// Set when the run works in a shared case folder (`--case-dir`).
     pub case: Option<CaseInfo>,
+    /// Run-level notes worded in the limitations catalogue, printed after [`LIMITATIONS`]
+    /// (`rv_certcheck_certs::codes::CONDITIONAL_LIMITATIONS`).
+    pub extra_limitations: Vec<&'static str>,
 }
 
 /// Counts of how the run's items relate to the case registry.
@@ -234,7 +249,7 @@ fn base(c: &Catalog, run: &RunInfo) -> serde_json::Map<String, Value> {
     m.insert(
         "limitations".into(),
         json!(
-            LIMITATIONS
+            run_limitations(run)
                 .iter()
                 .map(|l| c.limitation(l))
                 .collect::<Vec<_>>()
@@ -493,7 +508,7 @@ pub fn statistics_json(
         "case": run.case.as_ref().map(|c| c.to_json()),
         "items": items.iter().map(|it| json!({"index": it.index, "evidence_id": it.evidence_id, "path": it.path.display().to_string(), "size": it.size, "status": it.status(),
               "findings": it.findings.iter().map(|f| f.code.clone()).collect::<Vec<_>>(), "report_folder": format!("items/{}", it.folder())})).collect::<Vec<_>>(),
-        "limitations": LIMITATIONS,
+        "limitations": run_limitations(run),
         "audit": {"head": audit.head, "entries": audit.entries, "log_dir": audit.log_dir},
         "timestamp": if run.timestamp.is_object() { run.timestamp.clone() } else { json!({"status": "off"}) },
     })
@@ -511,7 +526,7 @@ pub fn technical_json(run: &RunInfo, it: &ItemResult) -> Value {
                  "status": it.case_status, "intake_utc": it.intake_utc})),
         "hashes": it.hashes.iter().map(|(a, h)| (a.name().to_string(), json!(h))).collect::<serde_json::Map<_, _>>(),
         "findings": findings_json(it, &run.langs),
-        "limitations": LIMITATIONS,
+        "limitations": run_limitations(run),
         "certificates": it.details,
         "outputs": it.outputs,
         "audit": {"first_seq": it.audit_first_seq, "last_seq": it.audit_last_seq},

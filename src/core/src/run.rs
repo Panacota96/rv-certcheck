@@ -631,6 +631,18 @@ fn pipeline(
 
     // Certificate stage across items: every certificate of the run completes paths, every CRL / OCSP response
     // of the run is a revocation source; chain.json and certificate.txt are written, hashed and audited.
+    // Run-level notes (worded as conditional limitations, printed in every report of the run and audited).
+    let mut run_notes: Vec<&'static str> = vec![];
+    if cfg.cert.validation.at == rv_certcheck_certs::AtTime::SigningTime {
+        let code = rv_certcheck_certs::codes::AT_SIGNING_TIME_TOKENS_ONLY_V01;
+        run_notes.push(code);
+        log.record(
+            "run_note",
+            None,
+            json!({"code": code, "text": crate::i18n::catalog("en").limitation(code)}),
+        )
+        .map_err(io)?;
+    }
     let outputs = {
         let mut stage: Vec<certscan::StageItem> = results
             .iter_mut()
@@ -638,6 +650,8 @@ fn pipeline(
             .map(|(r, s)| certscan::StageItem {
                 index: r.index,
                 file_name: r.file_name(),
+                path: r.path.clone(),
+                first_hash: r.hashes.first().cloned(),
                 scan: s,
                 findings: &mut r.findings,
             })
@@ -747,6 +761,7 @@ fn pipeline(
         signer,
         timestamp: json!({"status": "off"}),
         case: link.as_deref().map(|l| l.info(cfg.case_role)),
+        extra_limitations: run_notes.clone(),
     };
     let log_dir_s = log_dir.display().to_string();
     for r in &results {

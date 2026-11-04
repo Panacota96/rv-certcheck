@@ -277,6 +277,10 @@ pub fn analyze_item(
 pub struct StageItem<'a> {
     pub index: u64,
     pub file_name: String,
+    /// The examined file (re-read only to compare a paired file with a timestamp token's imprint).
+    pub path: PathBuf,
+    /// First-pass digest, which that re-read must reproduce.
+    pub first_hash: Option<(HashAlgo, String)>,
     pub scan: &'a mut ItemScan,
     pub findings: &'a mut Vec<Finding>,
 }
@@ -351,6 +355,19 @@ pub fn cross_item_stage(
         }
     }
     let v = &opts.validation;
+    // (index, file name, path, first-pass digest, is a timestamp token) of every item, for imprint pairing.
+    let files: Vec<(u64, String, PathBuf, Option<(HashAlgo, String)>, bool)> = items
+        .iter()
+        .map(|it| {
+            (
+                it.index,
+                it.file_name.clone(),
+                it.path.clone(),
+                it.first_hash.clone(),
+                it.scan.kind == Some(InputKind::TimestampToken),
+            )
+        })
+        .collect();
     let mut out = vec![];
     for it in items.iter_mut() {
         if !it.scan.crypto {
@@ -412,7 +429,11 @@ pub fn cross_item_stage(
                     ocsp: &ocsp,
                     ..Default::default()
                 };
-                match certs::verify_timestamp_token(&token, None, &req, v) {
+                let check = p
+                    .timestamp
+                    .as_ref()
+                    .and_then(|t| imprint_check(it.index, &it.file_name, t, &files));
+                match certs::verify_timestamp_token_checked(&token, check.as_ref(), &req, v) {
                     Ok(tv) => {
                         for s in &tv.signals {
                             push_unique(it.findings, finding(s));
@@ -467,6 +488,104 @@ pub fn cross_item_stage(
         out.push(StageOutput { files, details });
     }
     out
+}
+
+/// Files paired with a timestamp token the way keys are paired with certificates: same stem, same run
+/// (`data.tsr` ↔ `data`, `data.txt`, `data.bin`; other timestamp tokens excluded).
+fn paired_files<'f>(
+    token_index: u64,
+    token_name: &str,
+    files: &'f [(u64, String, PathBuf, Option<(HashAlgo, String)>, bool)],
+) -> Vec<&'f (u64, String, PathBuf, Option<(HashAlgo, String)>, bool)> {
+    let s = stem(token_name);
+    if s.is_empty() {
+        return vec![];
+    }
+    files
+        .iter()
+        .filter(|(i, name, _, _, is_token)| {
+            let n = name.to_ascii_lowercase();
+            *i != token_index && !*is_token && (n == s || n.starts_with(&format!("{s}.")))
+        })
+        .collect()
+}
+
+/// Streams one paired file through the token's imprint algorithm and the run's first-pass algorithm (the file
+/// must still be the one hashed). Err = why it could not be compared.
+fn imprint_of(
+    path: &Path,
+    hash_algorithm: &str,
+    first: Option<&(HashAlgo, String)>,
+) -> Result<String, String> {
+    let mut h = certs::ImprintHasher::new(hash_algorithm).map_err(|e| e.message)?;
+    let f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    struct Tee<'h, R> {
+        inner: R,
+        h: &'h mut certs::ImprintHasher,
+        err: Option<String>,
+    }
+    impl<R: Read> Read for Tee<'_, R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.inner.read(buf)?;
+            if let Err(e) = self.h.update(&buf[..n]) {
+                self.err = Some(e.message);
+            }
+            Ok(n)
+        }
+    }
+    let mut tee = Tee {
+        inner: f,
+        h: &mut h,
+        err: None,
+    };
+    let algos: Vec<HashAlgo> = first.map(|(a, _)| vec![*a]).unwrap_or_default();
+    if algos.is_empty() {
+        std::io::copy(&mut tee, &mut std::io::sink()).map_err(|e| e.to_string())?;
+    } else {
+        let o = crate::hash::hash_reader(&mut tee, &algos, |_| true)
+            .map_err(|e| e.to_string())?
+            .ok_or("cancelled")?;
+        if let (Some((_, want)), Some((_, got))) = (first, o.digests.first()) {
+            if want != got {
+                return Err("changed since it was hashed in this run".into());
+            }
+        }
+    }
+    if let Some(e) = tee.err {
+        return Err(e);
+    }
+    h.finish().map_err(|e| e.message)
+}
+
+/// The imprint comparison of a token with its paired files: the first file that matches; else a mismatch
+/// naming every paired file; None when no file is paired (the token is then not linked to any file).
+fn imprint_check(
+    token_index: u64,
+    token_name: &str,
+    t: &certs::TimestampInfo,
+    files: &[(u64, String, PathBuf, Option<(HashAlgo, String)>, bool)],
+) -> Option<certs::ImprintCheck> {
+    let paired = paired_files(token_index, token_name, files);
+    if paired.is_empty() {
+        return None;
+    }
+    let mut names = vec![];
+    for (_, name, path, first, _) in &paired {
+        match imprint_of(path, &t.hash_algorithm, first.as_ref()) {
+            Ok(d) if d.eq_ignore_ascii_case(&t.message_imprint_hex) => {
+                return Some(certs::ImprintCheck {
+                    file: name.clone(),
+                    matches: true,
+                });
+            }
+            Ok(_) => names.push(name.clone()),
+            Err(e) => names.push(format!("{name} ({e})")),
+        }
+    }
+    Some(certs::ImprintCheck {
+        file: names.join(", "),
+        matches: false,
+    })
 }
 
 /// KEY_MATCHES_CERTIFICATE (any certificate of the run has the key's SPKI), else KEY_DOES_NOT_MATCH against the
@@ -541,7 +660,10 @@ mod tests {
                     "{lang}: finding {code} lacks title / shows / does_not_prove"
                 );
             }
-            for l in codes::LIMITATIONS {
+            for l in codes::LIMITATIONS
+                .iter()
+                .chain(codes::CONDITIONAL_LIMITATIONS)
+            {
                 assert!(
                     c.limitation(l) != *l && !c.limitation(l).is_empty(),
                     "{lang}: limitation {l} is not worded"

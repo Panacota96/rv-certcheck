@@ -788,7 +788,10 @@ fn trust_list_service_withdrawn_before_the_date_is_not_an_anchor() {
         .iter()
         .find(|s| s.code == codes::CERT_CHAIN_UNTRUSTED && s.params.contains_key("service"))
         .unwrap_or_else(|| panic!("untrusted with the service named: {v:#?}"));
-    assert_eq!(s.params["service"], "Lab Root CA (withdrawn before the date)");
+    assert_eq!(
+        s.params["service"],
+        "Lab Root CA (withdrawn before the date)"
+    );
     assert!(s.params["service_status"].ends_with("/withdrawn"), "{s:?}");
     assert!(s.params["reason"].contains("withdrawn"), "{s:?}");
     assert!(v.nodes.iter().all(|n| n.anchor.is_none()), "{v:#?}");
@@ -830,7 +833,10 @@ fn trust_list_service_withdrawn_after_the_date_is_an_anchor() {
         .iter()
         .find(|s| s.code == codes::CERT_CHAIN_UNTRUSTED && s.params.contains_key("service"))
         .unwrap_or_else(|| panic!("{v:#?}"));
-    assert_eq!(s.params["service"], "Unrelated Root CA (withdrawn after the date)");
+    assert_eq!(
+        s.params["service"],
+        "Unrelated Root CA (withdrawn after the date)"
+    );
 }
 
 #[test]
@@ -839,7 +845,11 @@ fn trust_list_tsa_services_anchor_only_for_timestamping() {
     let a = withdrawn_anchor(dir.path());
     // The TSA's own certificate is listed under a granted TSA/QTST service; its CA's service is withdrawn.
     let v = verdict(&der("tsa.crt"), &a, &[], &[], &opts(AT, Purpose::Any));
-    assert_eq!(v.status, ChainStatus::Untrusted, "TSA type is not a CA anchor: {v:#?}");
+    assert_eq!(
+        v.status,
+        ChainStatus::Untrusted,
+        "TSA type is not a CA anchor: {v:#?}"
+    );
     let v = verdict(
         &der("tsa.crt"),
         &a,
@@ -847,7 +857,11 @@ fn trust_list_tsa_services_anchor_only_for_timestamping() {
         &[],
         &opts(AT, Purpose::Timestamping),
     );
-    assert_eq!(v.status, ChainStatus::Valid, "QTST anchors timestamping: {v:#?}");
+    assert_eq!(
+        v.status,
+        ChainStatus::Valid,
+        "QTST anchors timestamping: {v:#?}"
+    );
 }
 
 #[test]
@@ -878,6 +892,10 @@ fn colombian_csv_suspended_service_is_not_an_anchor_during_the_suspension() {
         &opts("2026-07-15T00:00:00Z", Purpose::Any),
     );
     assert_eq!(v.status, ChainStatus::Untrusted, "suspended: {v:#?}");
-    assert!(v.signals.iter().any(|s| s.code == codes::CERT_CHAIN_UNTRUSTED
-        && s.params.get("service_status").map(String::as_str) == Some("suspended")));
+    assert!(
+        v.signals
+            .iter()
+            .any(|s| s.code == codes::CERT_CHAIN_UNTRUSTED
+                && s.params.get("service_status").map(String::as_str) == Some("suspended"))
+    );
 }

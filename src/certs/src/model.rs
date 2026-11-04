@@ -192,7 +192,8 @@ pub mod codes {
     pub const KEY_DOES_NOT_MATCH: &str = "KEY_DOES_NOT_MATCH";
     /// info [key]
     pub const KEY_NOT_PAIRED: &str = "KEY_NOT_PAIRED";
-    /// info [gen_time, tsa, policy, hash_algorithm]
+    /// info [gen_time, tsa, policy, hash_algorithm, imprint_checked (yes | no), imprint_file (the paired file or
+    /// `none`: the token is then not linked to any file)]
     pub const TIMESTAMP_TOKEN_VALID: &str = "TIMESTAMP_TOKEN_VALID";
     /// high [reason]
     pub const TIMESTAMP_TOKEN_INVALID: &str = "TIMESTAMP_TOKEN_INVALID";
@@ -253,6 +254,13 @@ pub mod codes {
         "TIMESTAMPS_FROM_FILESYSTEM",
         "TIMESTAMP_PROVES_EXISTENCE_ONLY",
     ];
+
+    /// `--at signing-time` in v0.1: only timestamp tokens have a signing time (their genTime, for their own TSA
+    /// chain); every other item is judged now. Printed with the limitations of a run that used it.
+    pub const AT_SIGNING_TIME_TOKENS_ONLY_V01: &str = "AT_SIGNING_TIME_TOKENS_ONLY_V01";
+
+    /// Run-level notes worded like limitations but printed only in the runs they apply to.
+    pub const CONDITIONAL_LIMITATIONS: &[&str] = &[AT_SIGNING_TIME_TOKENS_ONLY_V01];
 
     pub fn severity(code: &str) -> Option<&'static str> {
         FINDINGS.iter().find(|(c, _)| *c == code).map(|(_, s)| *s)
@@ -1010,10 +1018,21 @@ pub struct TimestampVerdict {
     pub signature_valid: bool,
     /// Some(..) when the caller supplied the data: its digest equals the message imprint.
     pub imprint_matches: Option<bool>,
+    /// The file the imprint was compared with (None = not linked to any file). Added after the freeze.
+    #[serde(default)]
+    pub imprint_file: Option<String>,
     /// The TSA certificate's chain at genTime with purpose timestamping.
     pub signer_chain: Option<ChainVerdict>,
     /// TIMESTAMP_TOKEN_VALID or TIMESTAMP_TOKEN_INVALID (+ chain signals).
     pub signals: Vec<Signal>,
+}
+
+/// The message-imprint comparison of a timestamp token with one evidence file (made by the caller, streaming).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImprintCheck {
+    /// The file's name as reported (`data.txt`), or `the data supplied`.
+    pub file: String,
+    pub matches: bool,
 }
 
 /// Result of [`crate::match_key`].

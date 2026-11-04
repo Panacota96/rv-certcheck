@@ -13,7 +13,8 @@
 //! 4. the TSA certificate's chain is valid at genTime for the purpose timestamping (OpenSSL's
 //!    X509_PURPOSE_TIMESTAMP_SIGN: critical EKU timeStamping only), via [`super::chain::validate_chain`];
 //! 5. genTime is inside the TSA certificate's validity period;
-//! 6. with data: its digest (the token's hash algorithm) equals the message imprint.
+//! 6. with data (or a caller's [`ImprintCheck`] against a paired evidence file): its digest equals the message
+//!    imprint. Without it the token is valid but not linked to any file (`imprint_checked=no`).
 use super::parse::cert_info;
 use super::util::*;
 use crate::model::*;
@@ -249,6 +250,29 @@ pub fn verify_timestamp_token(
     req: &ChainRequest,
     opts: &ValidationOptions,
 ) -> CertResult<TimestampVerdict> {
+    let check = match data {
+        Some(d) => {
+            let (info, _) = parse_token(token)?;
+            let md = openssl::hash::MessageDigest::from_name(&info.hash_algorithm);
+            let matches = md
+                .and_then(|md| openssl::hash::hash(md, d).ok())
+                .is_some_and(|h| hex(&h) == info.message_imprint_hex);
+            Some(ImprintCheck {
+                file: "the data supplied".into(),
+                matches,
+            })
+        }
+        None => None,
+    };
+    verify_timestamp_token_checked(token, check.as_ref(), req, opts)
+}
+
+pub fn verify_timestamp_token_checked(
+    token: &[u8],
+    imprint: Option<&ImprintCheck>,
+    req: &ChainRequest,
+    opts: &ValidationOptions,
+) -> CertResult<TimestampVerdict> {
     let (info, tok) = parse_token(token)?;
     let mut problems: Vec<String> = vec![];
     let mut v = TimestampVerdict {
@@ -381,17 +405,14 @@ pub fn verify_timestamp_token(
     } else {
         problems.push("the response holds no timestamp token".into());
     }
-    // 6. Message imprint.
-    if let Some(d) = data {
-        let md = openssl::hash::MessageDigest::from_name(&info.hash_algorithm);
-        let m = md
-            .and_then(|md| openssl::hash::hash(md, d).ok())
-            .is_some_and(|h| hex(&h) == info.message_imprint_hex);
-        v.imprint_matches = Some(m);
-        if !m {
+    // 6. Message imprint (compared by the caller with the paired file).
+    if let Some(c) = imprint {
+        v.imprint_matches = Some(c.matches);
+        v.imprint_file = Some(c.file.clone());
+        if !c.matches {
             problems.push(format!(
-                "the {} digest of the data supplied does not equal the token's message imprint",
-                info.hash_algorithm
+                "imprint does not match {} (its {} digest differs from the token's message imprint)",
+                c.file, info.hash_algorithm
             ));
         }
     }
@@ -407,7 +428,17 @@ pub fn verify_timestamp_token(
                 .with("gen_time", &info.gen_time)
                 .with("tsa", tsa)
                 .with("policy", &info.policy_oid)
-                .with("hash_algorithm", &info.hash_algorithm),
+                .with("hash_algorithm", &info.hash_algorithm)
+                .with(
+                    "imprint_checked",
+                    if imprint.is_some() { "yes" } else { "no" },
+                )
+                .with(
+                    "imprint_file",
+                    imprint
+                        .map(|c| c.file.clone())
+                        .unwrap_or_else(|| "none".into()),
+                ),
         );
     } else {
         v.signals

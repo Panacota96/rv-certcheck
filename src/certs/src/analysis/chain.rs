@@ -110,7 +110,11 @@ pub fn validate_chain(req: &ChainRequest, opts: &ValidationOptions) -> CertResul
     });
     let target_der = target.to_der().map_err(|e| parse_err("target", e))?;
     let mut untrusted: Vec<X509> = vec![];
-    for d in req.untrusted_der.iter().chain(withheld.iter().map(|(d, ..)| d)) {
+    for d in req
+        .untrusted_der
+        .iter()
+        .chain(withheld.iter().map(|(d, ..)| d))
+    {
         if let Ok(x) = X509::from_der(d) {
             let xd = x.to_der().ok();
             if xd.as_deref() != Some(&target_der[..])
@@ -130,14 +134,30 @@ pub fn validate_chain(req: &ChainRequest, opts: &ValidationOptions) -> CertResul
     let mut ocsp = req.ocsp.to_vec();
     let mut fetches = vec![];
 
-    let mut walk = run_walk(&target, &anchors, &untrusted, &crls, at_e, opts.purpose, partial)?;
+    let mut walk = run_walk(
+        &target,
+        &anchors,
+        &untrusted,
+        &crls,
+        at_e,
+        opts.purpose,
+        partial,
+    )?;
     if opts.online {
         let (more_crls, more_ocsp, f) = super::online::fetch_for_chain(&walk.chain);
         fetches = f;
         if !more_crls.is_empty() || !more_ocsp.is_empty() {
             crls.extend(more_crls);
             ocsp.extend(more_ocsp);
-            walk = run_walk(&target, &anchors, &untrusted, &crls, at_e, opts.purpose, partial)?;
+            walk = run_walk(
+                &target,
+                &anchors,
+                &untrusted,
+                &crls,
+                at_e,
+                opts.purpose,
+                partial,
+            )?;
         }
     }
     notes.extend(walk.notes.iter().cloned());

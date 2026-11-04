@@ -286,7 +286,8 @@
     "TRUST_LIST_SNAPSHOT_DATED": "Les listes de confiance sont utilisées sous forme d'instantanés datés (date et SHA-256 consignés) ; les services ajoutés, suspendus ou retirés après l'instantané ne sont pas pris en compte.",
     "TRUST_LIST_SIGNATURE_NOT_VERIFIED_V01": "En version 0.1, la signature XAdES de la liste de confiance elle-même n'est pas vérifiée ; la source et le SHA-256 de l'instantané sont consignés pour permettre un contrôle indépendant. La liste colombienne est un fichier établi manuellement, l'ONAC ne publiant pas de liste lisible par machine.",
     "RAKVOR_CERTIFICATES_ARE_INTERNAL_USE": "Les certificats émis par l'ICP interne de Rakvor sont réservés à un usage interne : ils ne constituent pas une firma digital au sens de l'article 28 de la Ley 527 de 1999 (Colombie) et ne sont pas des certificats qualifiés au sens du règlement eIDAS (règlement (UE) n° 910/2014).",
-    "NO_VALIDATED_ERROR_RATES_YET": "Les résultats de l'outil ont été comparés à OpenSSL et à des implémentations de référence en Python sur des jeux d'essai, mais aucun taux d'erreur n'a encore été mesuré sur un corpus validé."
+    "NO_VALIDATED_ERROR_RATES_YET": "Les résultats de l'outil ont été comparés à OpenSSL et à des implémentations de référence en Python sur des jeux d'essai, mais aucun taux d'erreur n'a encore été mesuré sur un corpus validé.",
+    "AT_SIGNING_TIME_TOKENS_ONLY_V01": "--at signing-time a été utilisé : en v0.1 seuls les jetons d'horodatage (.tsr, .tst) ont une heure de signature, leur genTime, qui sert à juger la chaîne de leur propre autorité d'horodatage ; les autres éléments n'ont pas encore d'heure de signature et leurs chaînes ont été jugées à l'instant présent (l'at_source du verdict indique signing-time-unavailable-now). Indiquez la date explicitement avec --at pour les juger à un autre instant."
   },
   "brand": {
     "descriptor": "INVESTIGATION NUMÉRIQUE | RÉPONSE AUX INCIDENTS | SÉCURITÉ",

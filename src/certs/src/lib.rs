@@ -128,6 +128,48 @@ pub fn verify_timestamp_token(
     analysis::timestamp::verify_timestamp_token(token, data, req, opts)
 }
 
+/// Like [`verify_timestamp_token`], with the message-imprint comparison already made by the caller against a named
+/// evidence file (`None` = no file paired with the token: the token is reported valid with
+/// `imprint_checked=no`, not linked to any file). Core pairs `data.tsr` with `data` / `data.*` of the same run.
+pub fn verify_timestamp_token_checked(
+    token: &[u8],
+    imprint: Option<&ImprintCheck>,
+    req: &ChainRequest,
+    opts: &ValidationOptions,
+) -> CertResult<TimestampVerdict> {
+    analysis::timestamp::verify_timestamp_token_checked(token, imprint, req, opts)
+}
+
+/// Streaming digest with the token's hash algorithm (`TimestampInfo::hash_algorithm`, an OpenSSL short name),
+/// for comparing an evidence file of any size with a token's message imprint.
+pub struct ImprintHasher(openssl::hash::Hasher);
+
+impl ImprintHasher {
+    pub fn new(hash_algorithm: &str) -> CertResult<ImprintHasher> {
+        let md = openssl::hash::MessageDigest::from_name(hash_algorithm).ok_or_else(|| {
+            CertError::new(
+                ErrorKind::Unsupported,
+                format!("unknown imprint hash algorithm {hash_algorithm}"),
+            )
+        })?;
+        openssl::hash::Hasher::new(md)
+            .map(ImprintHasher)
+            .map_err(|e| CertError::new(ErrorKind::Crypto, format!("imprint hasher: {e}")))
+    }
+    pub fn update(&mut self, data: &[u8]) -> CertResult<()> {
+        self.0
+            .update(data)
+            .map_err(|e| CertError::new(ErrorKind::Crypto, format!("imprint hasher: {e}")))
+    }
+    /// Lowercase hex digest.
+    pub fn finish(mut self) -> CertResult<String> {
+        self.0
+            .finish()
+            .map(|d| hex(&d))
+            .map_err(|e| CertError::new(ErrorKind::Crypto, format!("imprint hasher: {e}")))
+    }
+}
+
 /// Whether the private key in `key` (PEM/DER, PKCS#8/PKCS#1/SEC1, or a PKCS#12) is the key of `cert_der`. The key
 /// is used in memory only and never copied, logged or returned. Oracle: compare `openssl pkey -pubout` with
 /// `openssl x509 -pubkey`.
