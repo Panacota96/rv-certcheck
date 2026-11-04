@@ -5,7 +5,8 @@
 
 use crate::model::*;
 use rand_chacha::ChaCha20Rng;
-use rand_core::{RngCore, SeedableRng};
+// rand_core through rand_chacha's re-export (no separate dependency, so the versions cannot drift).
+use rand_chacha::rand_core::{RngCore, SeedableRng};
 
 pub enum Rand {
     /// OpenSSL `RAND_bytes` (the operating system's CSPRNG behind OpenSSL's DRBG).

@@ -46,7 +46,7 @@ DESCRIPTION:
   Rakvor's internal PKI. A CA folder (schema rakvor.ca/1) holds ca.json, the hash-chained issued.jsonl,
   certs/ (ca.crt and <serial>.crt), crl/ (<n>.crl, latest.crl), ocsp/ and keys/ (encrypted CA key,
   owner-only; a token key is only referenced). Every certificate carries a random 128-bit serial,
-  AKI/SKI, the CRL URL of ca.json (crl_url) when set, and the Rakvor internal policy
+  AKI/SKI, the CRL URL of ca.json (crl_url, set with pki set --crl-url) when set, and the Rakvor internal policy
   2.25.130074246409705057913773883974790544206.1.1 with its user notice.
 
   INTERNAL USE ONLY: these certificates are not a firma digital under Ley 527 de 1999 art. 28
@@ -526,19 +526,6 @@ fn read(p: &PathBuf) -> Result<Vec<u8>, u8> {
         eprintln!("error: cannot read {}: {}", p.display(), e);
         EXIT_ERROR
     })
-}
-
-fn done<T: serde::Serialize>(r: certs::CertResult<T>) -> u8 {
-    match r {
-        Ok(v) => {
-            println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
-            EXIT_OK
-        }
-        Err(e) => {
-            eprintln!("error: {}", e);
-            EXIT_ERROR
-        }
-    }
 }
 
 fn internal_notice() -> String {
@@ -2058,38 +2045,73 @@ pub fn tokens(c: TokensCommand) -> u8 {
 }
 
 // ------------------------------------------------------------------------------------------------------------
-// trust-list (unchanged; agent A's area)
+// trust-list (audited runs, like the creation commands)
 // ------------------------------------------------------------------------------------------------------------
 
 #[derive(Subcommand)]
 pub enum TrustListCommand {
     /// Import a trust list as a dated, hashed snapshot: eu (LOTL/TL XML) or co (curated CSV).
+    #[command(after_long_help = format!("{TRUST_LIST_NOTE}\n\n{CREATION_EXIT_CODES}\n\n{CREATION_FILES}\n  <STORE>/<LIST>/<ID>.json and <ID>.json.sha256 (the snapshot and its digest)"))]
     Import {
-        /// eu or co.
-        #[arg(long, value_name = "LIST", value_parser = ["eu", "co"])]
+        /// Which list: eu (ETSI TS 119 612 LOTL/TL XML) or co (Rakvor's curated CSV of ONAC-accredited ECDs).
+        /// Default: none (required)
+        /// Example: --list eu
+        #[arg(long, value_name = "LIST", value_parser = ["eu", "co"], verbatim_doc_comment)]
         list: String,
-        /// The XML or CSV file.
+        /// The XML or CSV file to import (its SHA-256 and path are recorded in the snapshot and the audit log).
+        /// Default: none (required)
+        /// Example: D:\trust\TL-ES.xml
+        #[arg(value_name = "FILE", verbatim_doc_comment)]
         file: PathBuf,
-        /// Snapshot folder. Default: the tool's data folder (RV_CERTCHECK_DATA overrides)
-        #[arg(long, value_name = "DIR")]
+        /// Snapshot folder.
+        /// Default: the tool's data folder (RV_CERTCHECK_DATA overrides)
+        /// Example: --store D:\trust-snapshots
+        #[arg(long, value_name = "DIR", verbatim_doc_comment)]
         store: Option<PathBuf>,
+        #[command(flatten)]
+        run: RunArgs,
     },
     /// List stored snapshots, newest first.
+    #[command(after_long_help = format!("{TRUST_LIST_NOTE}\n\n{CREATION_EXIT_CODES}\n\n{CREATION_FILES}"))]
     List {
-        #[arg(long, value_name = "DIR")]
+        /// Snapshot folder.
+        /// Default: the tool's data folder (RV_CERTCHECK_DATA overrides)
+        /// Example: --store D:\trust-snapshots
+        #[arg(long, value_name = "DIR", verbatim_doc_comment)]
         store: Option<PathBuf>,
+        #[command(flatten)]
+        run: RunArgs,
     },
-    /// Show one snapshot (services, status history).
+    /// Show one snapshot (services, status history); its stored digest is checked first.
+    #[command(after_long_help = format!("{TRUST_LIST_NOTE}\n\n{CREATION_EXIT_CODES}\n\n{CREATION_FILES}"))]
     Show {
-        /// eu or co.
-        #[arg(long, value_name = "LIST", value_parser = ["eu", "co"])]
+        /// Which list: eu or co.
+        /// Default: none (required)
+        /// Example: --list co
+        #[arg(long, value_name = "LIST", value_parser = ["eu", "co"], verbatim_doc_comment)]
         list: String,
-        /// Snapshot id or latest.
+        /// Snapshot id, or latest for the newest of that list.
+        /// Default: none (required)
+        /// Example: eu-20261103T101500Z-1a2b3c4d   or   latest
+        #[arg(value_name = "ID", verbatim_doc_comment)]
         id: String,
-        #[arg(long, value_name = "DIR")]
+        /// Snapshot folder.
+        /// Default: the tool's data folder (RV_CERTCHECK_DATA overrides)
+        /// Example: --store D:\trust-snapshots
+        #[arg(long, value_name = "DIR", verbatim_doc_comment)]
         store: Option<PathBuf>,
+        #[command(flatten)]
+        run: RunArgs,
     },
 }
+
+const TRUST_LIST_NOTE: &str = "\
+TRUST LISTS:
+  A snapshot is used with analyze --anchor tl:eu@ID / tl:co@ID (latest = newest). Only the
+  certificates of services whose status at --at is granted, recognised at national level or
+  accredited are anchors (CA types; TSA types for timestamping). The list's own XAdES signature
+  is not verified in v0.1: the snapshot records the source's SHA-256 so it can be checked
+  independently.";
 
 fn list_kind(s: &str) -> TrustListKind {
     if s == "co" {
@@ -2099,6 +2121,8 @@ fn list_kind(s: &str) -> TrustListKind {
     }
 }
 
+const TRUST_LIST_NOTICE: &str = "Trust-list snapshot: dated and hashed; the list's own signature is not verified in v0.1 (limitation TRUST_LIST_SIGNATURE_NOT_VERIFIED_V01).";
+
 pub fn trust_list(c: TrustListCommand) -> u8 {
     let store = |s: Option<PathBuf>| s.unwrap_or_else(certs::trust_list::default_store_dir);
     match c {
@@ -2106,22 +2130,147 @@ pub fn trust_list(c: TrustListCommand) -> u8 {
             list,
             file,
             store: s,
+            run,
         } => {
             let data = match read(&file) {
                 Ok(b) => b,
                 Err(c) => return c,
             };
+            let dir = store(s);
+            let mut r = match CreationRun::start(
+                &run,
+                "trust-list import",
+                json!({"list": list, "file": file.display().to_string(),
+                       "file_sha256": hash_bytes(&data, HashAlgo::Sha256), "store": dir.display().to_string()}),
+            ) {
+                Ok(r) => r,
+                Err(c) => return c,
+            };
             let source = format!("file:{}", file.display());
             let now = rv_certcheck_core::time::utc_now();
-            let dir = store(s);
-            done(match list_kind(&list) {
+            let res = match list_kind(&list) {
                 TrustListKind::Eu => certs::trust_list::import_eu(&data, &source, &now, &dir),
                 TrustListKind::Co => certs::trust_list::import_co_csv(&data, &source, &now, &dir),
-            })
+            };
+            match res {
+                Err(e) => r.fail(&e),
+                Ok(snap) => {
+                    r.record(
+                        "trust_list_imported",
+                        Some(&snap.id),
+                        json!({"list": snap.list, "source": snap.source, "source_sha256": snap.sha256,
+                               "services": snap.services.len(), "entries": snap.entries.len(),
+                               "signature_verified": snap.signature_verified}),
+                    );
+                    let json_path = dir.join(&snap.list).join(format!("{}.json", snap.id));
+                    r.file("trust-list snapshot", &json_path);
+                    r.file(
+                        "snapshot digest",
+                        &dir.join(&snap.list)
+                            .join(format!("{}.json.sha256", snap.id)),
+                    );
+                    let s = vec![
+                        format!("Trust list imported: {}", snap.id),
+                        format!("  source:      {} (SHA-256 {})", snap.source, snap.sha256),
+                        format!(
+                            "  services:    {}, certificates: {}",
+                            snap.services.len(),
+                            snap.entries.len()
+                        ),
+                        format!("  use with:    --anchor tl:{}@{}", snap.list, snap.id),
+                    ];
+                    r.finish(
+                        serde_json::to_value(&snap).unwrap_or_default(),
+                        s,
+                        TRUST_LIST_NOTICE,
+                        EXIT_OK,
+                    )
+                }
+            }
         }
-        TrustListCommand::List { store: s } => done(certs::trust_list::list(&store(s))),
-        TrustListCommand::Show { list, id, store: s } => {
-            done(certs::trust_list::load(&store(s), list_kind(&list), &id))
+        TrustListCommand::List { store: s, run } => {
+            let dir = store(s);
+            let mut r = match CreationRun::start(
+                &run,
+                "trust-list list",
+                json!({"store": dir.display().to_string()}),
+            ) {
+                Ok(r) => r,
+                Err(c) => return c,
+            };
+            match certs::trust_list::list(&dir) {
+                Err(e) => r.fail(&e),
+                Ok(all) => {
+                    r.record("trust_lists_listed", None, json!({"snapshots": all.iter().map(|x| json!({"id": x.id, "sha256": x.sha256})).collect::<Vec<_>>()}));
+                    let mut s = vec![format!("{} snapshot(s) in {}", all.len(), dir.display())];
+                    for x in &all {
+                        s.push(format!(
+                            "  {}  {}  {} services, {} certificates  {}",
+                            x.id, x.fetched_utc, x.services, x.entries, x.source
+                        ));
+                    }
+                    r.finish(
+                        serde_json::to_value(&all).unwrap_or_default(),
+                        s,
+                        TRUST_LIST_NOTICE,
+                        EXIT_OK,
+                    )
+                }
+            }
+        }
+        TrustListCommand::Show {
+            list,
+            id,
+            store: s,
+            run,
+        } => {
+            let dir = store(s);
+            let mut r = match CreationRun::start(
+                &run,
+                "trust-list show",
+                json!({"list": list, "id": id, "store": dir.display().to_string()}),
+            ) {
+                Ok(r) => r,
+                Err(c) => return c,
+            };
+            match certs::trust_list::load(&dir, list_kind(&list), &id) {
+                Err(e) => r.fail(&e),
+                Ok(snap) => {
+                    r.record(
+                        "trust_list_shown",
+                        Some(&snap.id),
+                        json!({"list": snap.list, "source_sha256": snap.sha256}),
+                    );
+                    let mut s = vec![format!(
+                        "Snapshot {} ({}, fetched {})",
+                        snap.id, snap.source, snap.fetched_utc
+                    )];
+                    for svc in &snap.services {
+                        s.push(format!(
+                            "  [{}] {} / {}  {}  now: {}",
+                            svc.index,
+                            svc.tsp_name,
+                            svc.service_name,
+                            svc.service_type,
+                            svc.current_status
+                        ));
+                        for h in &svc.history {
+                            s.push(format!(
+                                "        {} .. {}  {}",
+                                h.from,
+                                h.until.as_deref().unwrap_or("(current)"),
+                                h.status
+                            ));
+                        }
+                    }
+                    r.finish(
+                        serde_json::to_value(&snap).unwrap_or_default(),
+                        s,
+                        TRUST_LIST_NOTICE,
+                        EXIT_OK,
+                    )
+                }
+            }
         }
     }
 }

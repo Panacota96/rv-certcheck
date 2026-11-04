@@ -120,6 +120,9 @@ fn creation_help_documents_every_option() {
         vec!["lab", "make"],
         vec!["keys", "match"],
         vec!["tokens", "list"],
+        vec!["trust-list", "import"],
+        vec!["trust-list", "list"],
+        vec!["trust-list", "show"],
     ] {
         let o = bin(d.path()).args(&cmd).arg("--help").output().unwrap();
         let text = String::from_utf8(o.stdout).unwrap();
@@ -974,4 +977,63 @@ fn key_type_defaults_per_profile_and_examiner_must_be_rsa() {
         h.contains("p-384 intermediate") && h.contains("rsa-3072 code-signing, examiner"),
         "{h}"
     );
+}
+
+#[test]
+fn trust_list_commands_write_audited_runs() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path();
+    let xml = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/trustlists/tl-withdrawn.xml");
+    let snap = ok_json(
+        bin(dir)
+            .args(["trust-list", "import", "--list", "eu", "--store", "store"])
+            .arg(&xml),
+    );
+    let id = snap["id"].as_str().unwrap().to_string();
+    let shown = ok_json(bin(dir).args([
+        "trust-list",
+        "show",
+        "--list",
+        "eu",
+        "latest",
+        "--store",
+        "store",
+    ]));
+    assert_eq!(shown["id"], id.as_str());
+    let listed = ok_json(bin(dir).args(["trust-list", "list", "--store", "store"]));
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    // Three runs, each with a verifying audit log that names the command.
+    assert_eq!(every_run_log_verifies(dir), 3);
+    let logs: Vec<String> = std::fs::read_dir(dir.join("rakvor-out/logs"))
+        .unwrap()
+        .map(|e| std::fs::read_to_string(e.unwrap().path().join("audit.jsonl")).unwrap())
+        .collect();
+    for cmd in ["trust-list import", "trust-list show", "trust-list list"] {
+        assert!(logs.iter().any(|l| l.contains(cmd)), "{cmd}");
+    }
+    assert!(logs.iter().any(|l| l.contains("trust_list_imported")));
+    // An altered snapshot is refused (exit 3) and the refusal is audited.
+    let p = dir.join("store/eu").join(format!("{id}.json"));
+    let t = std::fs::read_to_string(&p).unwrap();
+    std::fs::write(&p, t.replacen("withdrawn", "granted", 1)).unwrap();
+    let o = bin(dir)
+        .args([
+            "trust-list",
+            "show",
+            "--list",
+            "eu",
+            &id,
+            "--store",
+            "store",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        o.status.code(),
+        Some(3),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert!(String::from_utf8_lossy(&o.stderr).contains("altered"));
 }

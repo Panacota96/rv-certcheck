@@ -390,7 +390,8 @@ DESCRIPTION:
   issued.jsonl,
   certs/ (ca.crt and <serial>.crt), crl/ (<n>.crl, latest.crl), ocsp/ and keys/ (encrypted CA key,
   owner-only; a token key is only referenced). Every certificate carries a random 128-bit serial,
-  AKI/SKI, the CRL URL of ca.json (crl_url) when set, and the Rakvor internal policy
+  AKI/SKI, the CRL URL of ca.json (crl_url, set with pki set --crl-url) when set, and the Rakvor
+  internal policy
   2.25.130074246409705057913773883974790544206.1.1 with its user notice.
 
   INTERNAL USE ONLY: these certificates are not a firma digital under Ley 527 de 1999 art. 28
@@ -1624,7 +1625,7 @@ Usage: rv-certcheck trust-list <COMMAND>
 Commands:
   import  Import a trust list as a dated, hashed snapshot: eu (LOTL/TL XML) or co (curated CSV)
   list    List stored snapshots, newest first
-  show    Show one snapshot (services, status history)
+  show    Show one snapshot (services, status history); its stored digest is checked first
   help    Print this message or the help of the given subcommand(s)
 
 Options:
@@ -1641,19 +1642,68 @@ Usage: rv-certcheck trust-list import [OPTIONS] --list <LIST> <FILE>
 
 Arguments:
   <FILE>
-          The XML or CSV file
+          The XML or CSV file to import (its SHA-256 and path are recorded in the snapshot and the
+          audit log).
+          Default: none (required)
+          Example: D:\trust\TL-ES.xml
 
 Options:
       --list <LIST>
-          eu or co
+          Which list: eu (ETSI TS 119 612 LOTL/TL XML) or co (Rakvor's curated CSV of
+          ONAC-accredited ECDs).
+          Default: none (required)
+          Example: --list eu
           
           [possible values: eu, co]
 
       --store <DIR>
-          Snapshot folder. Default: the tool's data folder (RV_CERTCHECK_DATA overrides)
+          Snapshot folder.
+          Default: the tool's data folder (RV_CERTCHECK_DATA overrides)
+          Example: --store D:\trust-snapshots
+
+      --out <DIR>
+          Folder for the run's audit log and report: <OUT>/logs/<RUN-ID>/ and
+          <OUT>/reports/<RUN-ID>/.
+          Default: rakvor-out
+          Example: --out D:\pki-runs
+
+      --json
+          Print the result as JSON on stdout instead of a summary.
+          Default: off (human-readable summary)
+          Example: --json
+
+      --actor <NAME>
+          Name written in the audit log and in issued.jsonl.
+          Default: the operating-system user name
+          Example: --actor "Ana Ruiz"
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
+
+TRUST LISTS:
+  A snapshot is used with analyze --anchor tl:eu@ID / tl:co@ID (latest = newest). Only the
+  certificates of services whose status at --at is granted, recognised at national level or
+  accredited are anchors (CA types; TSA types for timestamping). The list's own XAdES signature
+  is not verified in v0.1: the snapshot records the source's SHA-256 so it can be checked
+  independently.
+
+EXIT CODES:
+  0  Done.
+  1  Runtime error (file not readable, wrong password or PIN, token or crypto failure). Audited.
+  2  Usage error (bad option value, empty subject, unknown profile or reason).
+  3  Refused by a safety rule, or verification failed: root key on a token without --confirm-root,
+     client-internal profile (needs the CP/CPS, rv-certcheck#2), a file that would be overwritten, a
+     key that does not match its certificate, a CA folder whose issued.jsonl or files do not verify,
+     a key that does not match (keys match). Nothing is issued. Audited.
+
+FILES WRITTEN (every command):
+  <OUT>/logs/<RUN-ID>/audit.jsonl        Hash-chained log of the run (rv-certcheck verify-log checks
+  it).
+  <OUT>/logs/<RUN-ID>/audit.log          The same, human-readable.
+  <OUT>/logs/<RUN-ID>/environment.json   Tool version, OS, host, user, command line.
+  <OUT>/reports/<RUN-ID>/report.json|.txt  What was created or checked, with the SHA-256 of every
+  file.
+  <STORE>/<LIST>/<ID>.json and <ID>.json.sha256 (the snapshot and its digest)
 ```
 
 ### rv-certcheck trust-list list
@@ -1665,34 +1715,122 @@ Usage: rv-certcheck trust-list list [OPTIONS]
 
 Options:
       --store <DIR>
-          
+          Snapshot folder.
+          Default: the tool's data folder (RV_CERTCHECK_DATA overrides)
+          Example: --store D:\trust-snapshots
+
+      --out <DIR>
+          Folder for the run's audit log and report: <OUT>/logs/<RUN-ID>/ and
+          <OUT>/reports/<RUN-ID>/.
+          Default: rakvor-out
+          Example: --out D:\pki-runs
+
+      --json
+          Print the result as JSON on stdout instead of a summary.
+          Default: off (human-readable summary)
+          Example: --json
+
+      --actor <NAME>
+          Name written in the audit log and in issued.jsonl.
+          Default: the operating-system user name
+          Example: --actor "Ana Ruiz"
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
+
+TRUST LISTS:
+  A snapshot is used with analyze --anchor tl:eu@ID / tl:co@ID (latest = newest). Only the
+  certificates of services whose status at --at is granted, recognised at national level or
+  accredited are anchors (CA types; TSA types for timestamping). The list's own XAdES signature
+  is not verified in v0.1: the snapshot records the source's SHA-256 so it can be checked
+  independently.
+
+EXIT CODES:
+  0  Done.
+  1  Runtime error (file not readable, wrong password or PIN, token or crypto failure). Audited.
+  2  Usage error (bad option value, empty subject, unknown profile or reason).
+  3  Refused by a safety rule, or verification failed: root key on a token without --confirm-root,
+     client-internal profile (needs the CP/CPS, rv-certcheck#2), a file that would be overwritten, a
+     key that does not match its certificate, a CA folder whose issued.jsonl or files do not verify,
+     a key that does not match (keys match). Nothing is issued. Audited.
+
+FILES WRITTEN (every command):
+  <OUT>/logs/<RUN-ID>/audit.jsonl        Hash-chained log of the run (rv-certcheck verify-log checks
+  it).
+  <OUT>/logs/<RUN-ID>/audit.log          The same, human-readable.
+  <OUT>/logs/<RUN-ID>/environment.json   Tool version, OS, host, user, command line.
+  <OUT>/reports/<RUN-ID>/report.json|.txt  What was created or checked, with the SHA-256 of every
+  file.
 ```
 
 ### rv-certcheck trust-list show
 
 ```text
-Show one snapshot (services, status history)
+Show one snapshot (services, status history); its stored digest is checked first
 
 Usage: rv-certcheck trust-list show [OPTIONS] --list <LIST> <ID>
 
 Arguments:
   <ID>
-          Snapshot id or latest
+          Snapshot id, or latest for the newest of that list.
+          Default: none (required)
+          Example: eu-20261103T101500Z-1a2b3c4d   or   latest
 
 Options:
       --list <LIST>
-          eu or co
+          Which list: eu or co.
+          Default: none (required)
+          Example: --list co
           
           [possible values: eu, co]
 
       --store <DIR>
-          
+          Snapshot folder.
+          Default: the tool's data folder (RV_CERTCHECK_DATA overrides)
+          Example: --store D:\trust-snapshots
+
+      --out <DIR>
+          Folder for the run's audit log and report: <OUT>/logs/<RUN-ID>/ and
+          <OUT>/reports/<RUN-ID>/.
+          Default: rakvor-out
+          Example: --out D:\pki-runs
+
+      --json
+          Print the result as JSON on stdout instead of a summary.
+          Default: off (human-readable summary)
+          Example: --json
+
+      --actor <NAME>
+          Name written in the audit log and in issued.jsonl.
+          Default: the operating-system user name
+          Example: --actor "Ana Ruiz"
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
+
+TRUST LISTS:
+  A snapshot is used with analyze --anchor tl:eu@ID / tl:co@ID (latest = newest). Only the
+  certificates of services whose status at --at is granted, recognised at national level or
+  accredited are anchors (CA types; TSA types for timestamping). The list's own XAdES signature
+  is not verified in v0.1: the snapshot records the source's SHA-256 so it can be checked
+  independently.
+
+EXIT CODES:
+  0  Done.
+  1  Runtime error (file not readable, wrong password or PIN, token or crypto failure). Audited.
+  2  Usage error (bad option value, empty subject, unknown profile or reason).
+  3  Refused by a safety rule, or verification failed: root key on a token without --confirm-root,
+     client-internal profile (needs the CP/CPS, rv-certcheck#2), a file that would be overwritten, a
+     key that does not match its certificate, a CA folder whose issued.jsonl or files do not verify,
+     a key that does not match (keys match). Nothing is issued. Audited.
+
+FILES WRITTEN (every command):
+  <OUT>/logs/<RUN-ID>/audit.jsonl        Hash-chained log of the run (rv-certcheck verify-log checks
+  it).
+  <OUT>/logs/<RUN-ID>/audit.log          The same, human-readable.
+  <OUT>/logs/<RUN-ID>/environment.json   Tool version, OS, host, user, command line.
+  <OUT>/reports/<RUN-ID>/report.json|.txt  What was created or checked, with the SHA-256 of every
+  file.
 ```
 
 ## rv-certcheck verify-log

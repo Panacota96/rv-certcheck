@@ -61,6 +61,32 @@ jobs:
           python-version: "3.12"
       - name: Python helpers (independent verifiers + local test TSA/PKI for the trust tests)
         run: pip install blake3 jsonschema pyhanko
+      - name: SoftHSM2 token for the PKCS#11 tests (Linux; the token tests run instead of skipping)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q
+          sudo apt-get install -y softhsm2
+          dir="$RUNNER_TEMP/softhsm"
+          mkdir -p "$dir/tokens"
+          printf 'directories.tokendir = %s/tokens\nobjectstore.backend = file\nlog.level = ERROR\n' "$dir" > "$dir/softhsm2.conf"
+          export SOFTHSM2_CONF="$dir/softhsm2.conf"
+          # A distinctive PIN: the tests grep every output for it, so it must not occur by chance (e.g. in a digest).
+          pin="rv-ci-pin-4821"
+          softhsm2-util --init-token --free --label rv-certcheck-ci --pin "$pin" --so-pin "rv-ci-so-9035"
+          serial=$(softhsm2-util --show-slots | awk '/Serial number:/ && $3 != "" {print $3; exit}')
+          module=""
+          for m in /usr/lib/softhsm/libsofthsm2.so /usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so; do
+            if [ -f "$m" ]; then module="$m"; break; fi
+          done
+          test -n "$serial" && test -n "$module"
+          {
+            echo "SOFTHSM2_CONF=$SOFTHSM2_CONF"
+            echo "RV_TEST_PKCS11_MODULE=$module"
+            echo "RV_TEST_PKCS11_SERIAL=$serial"
+            echo "RV_TEST_PKCS11_PIN=$pin"
+          } >> "$GITHUB_ENV"
       - name: Unit and integration tests (includes docs/usage-cli.md drift check and trust tests)
         shell: bash
         env:

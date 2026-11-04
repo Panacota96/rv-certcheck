@@ -3477,8 +3477,6 @@ dependencies = [
  "pem",
  "quick-xml 0.42.0",
  "rand_chacha",
- "rand_core 0.6.4",
- "rsa",
  "serde",
  "serde_json",
  "sha1 0.11.0",

@@ -71,7 +71,7 @@ fn read_snapshot(path: &Path) -> CertResult<(TrustListSnapshot, String)> {
     let want = rec.split_whitespace().next().unwrap_or_default();
     if want != got {
         return Err(CertError::new(
-            ErrorKind::Parse,
+            ErrorKind::Policy,
             format!(
                 "trust-list snapshot {} was altered: SHA-256 {got}, recorded {want}",
                 path.display()

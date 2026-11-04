@@ -29,10 +29,9 @@ cryptoki = "0.12.1"
 quick-xml = "0.42.0"
 # OCSP response building for `pki ocsp-sign` (RustCrypto, der 0.7 like x509-cert 0.2 / cms 0.2 / x509-tsp 0.1).
 x509-ocsp = "0.2.1"
-# Seeded lab keys (`lab make --seed N`): ChaCha20 on rand_core 0.6, the rand_core of rsa 0.9 (RSA key generation
-# from a seed). rand_chacha 0.10 is newer but its rand_core 0.10 does not drive rsa 0.9.
+# Seeded lab material (`lab make --seed N`: serials, salts, IVs and the seeds of lab keys): ChaCha20, used through
+# its own rand_core re-export. Lab RSA primes come from that stream (keys.rs seeded_rsa, OpenSSL BIGNUM).
 rand_chacha = "0.3.1"
-rand_core = "0.6.4"
 # Passwords, PINs and key bytes are wiped from memory when dropped.
 zeroize = { version = "1.9.1", features = ["derive"] }
 # Dates and validity periods.
@@ -64,6 +63,7 @@ x509-cert = { version = "0.2", features = ["builder"] }
 der = { version = "0.7", features = ["alloc", "oid"] }
 spki = "0.7"
 const-oid = { version = "0.9", features = ["db"] }
+# RSA PKCS#1 v1.5 PDF signatures of the reports (core, trust.rs).
 rsa = { version = "0.9", features = ["sha2"] }
 sha2-legacy = { package = "sha2", version = "0.10" }
 tempfile = "3"
