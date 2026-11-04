@@ -5,6 +5,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Entries are generated from
 [Conventional Commits](https://www.conventionalcommits.org/) by release-please and reviewed by a human.
 
+## [0.2.0](https://github.com/Panacota96/rv-certcheck/compare/v0.1.0...v0.2.0) (2026-11-04)
+
+
+### Features
+
+* **certs:** freeze the certificate model, the certificate-layer API and the finding catalogue ([e82bf76](https://github.com/Panacota96/rv-certcheck/commit/e82bf763e62318ed4c66e2a5e76816dfd9ee36ae))
+* **cli:** audited pki, csr, lab, keys and tokens commands ([5f55596](https://github.com/Panacota96/rv-certcheck/commit/5f555965e8bff727962f3655251e8b09626f6d85))
+* **cli:** hidden describe --json (rakvor.describe/1) and GUI --case-dir for RV Hub ([acd0b35](https://github.com/Panacota96/rv-certcheck/commit/acd0b35307cc8ba0808a1d2065aed09c07baccc5))
+* **core,cli:** --online revocation fetching enabled and audited; no ANALYSIS_NOT_IMPLEMENTED path ([bd660a8](https://github.com/Panacota96/rv-certcheck/commit/bd660a8bb80e2120344ae45cc53d658011712adc))
+* **core:** creation module, the audited run of a creation operation for non-CLI front-ends (additive) ([aca83f8](https://github.com/Panacota96/rv-certcheck/commit/aca83f8e4775a72bf2e0368a728ea67e28f90d81))
+* **create:** Rakvor PKI, CSRs, seeded lab sets and PKCS[#11](https://github.com/Panacota96/rv-certcheck/issues/11) tokens ([270c3ba](https://github.com/Panacota96/rv-certcheck/commit/270c3bad2a5b3212b0c729fcfbede5d84367430d))
+* **gui:** Analyze, Create and Trust lists tabs over the certificate layer ([0ebb586](https://github.com/Panacota96/rv-certcheck/commit/0ebb58628e76fe80a98413b301f39a9f38630ea2))
+* **gui:** Rakvor window and .exe icon, headless screenshots, GUI usage guide ([3a6b0cc](https://github.com/Panacota96/rv-certcheck/commit/3a6b0cc0d37dbd38f60da4efc64f1d12ff18341f))
+
+
+### Bug Fixes
+
+* **analysis:** trust-list status at the date, CERT_CHAIN_INVALID, honest wording, timestamp imprint pairing ([2f17f6b](https://github.com/Panacota96/rv-certcheck/commit/2f17f6bfdd8355179dead781daa30b11e3f1699d))
+* **create:** DER length reader never panics on non-DER bytes (raw token EC points); drop unused rcgen; guide: rv-hashinv scan verb ([441003b](https://github.com/Panacota96/rv-certcheck/commit/441003bb938f7a1b9664558c84d06256fe3b95c2))
+* **gui:** masked fields keep no undo history (egui's undoer copies the text) ([ed1ffcf](https://github.com/Panacota96/rv-certcheck/commit/ed1ffcfad589fddd369f60515c3fb18add56d72a))
+* **pki:** record ca.json and check crl/latest.crl, pki set --crl-url, parent of imported CAs, RSA examiner keys ([34c2a87](https://github.com/Panacota96/rv-certcheck/commit/34c2a872476199142ec8658935985495c1f604d4))
+* **tokens:** portable CK_ULONG conversion for RSA modulus bits (Windows build) ([a804c77](https://github.com/Panacota96/rv-certcheck/commit/a804c77278b544d0d8c6483f855321f5b292c0aa))
+
 ## [Unreleased]
 
 ### Added
