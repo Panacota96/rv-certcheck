@@ -38,7 +38,7 @@ sequenceDiagram
 | Work on a **verified copy** (forensic image, write-blocked export), never the original media | The tool is read-only in software, not a write blocker | Imaging tool + write blocker; note model and serial |
 | The installed tool is the genuine release | Court question: "how do you know what you ran?" | [installation.md](installation.md) steps 2–4 and 6 |
 | **Anchors** | Nothing is trusted unless you say so | Obtain each root from its CA's official repository (or an EU trusted list / the curated Colombian CSV); record where it came from |
-| **The instant** | A chain is judged at one instant | The signing date, from a timestamp token or another reliable record; `--at signing-time` is not usable in v0.1 (falls back to now) |
+| **The instant** | A chain is judged at one instant | The signing date, from a timestamp token or another reliable record; `--at signing-time` gives a signing time only to timestamp tokens in v0.1 (other items are judged now, and the reports say so) |
 | **Revocation data** | Offline, only supplied CRLs / OCSP count | The CA's CRL covering the instant (`--crl`), an OCSP response (`--ocsp`), or `--online` on a connected machine (every URL audited) |
 | **Purpose** | A certificate is checked for one use | `--purpose document-signing` for signed documents, `code-signing` for software, `tls-server` for web sites, `timestamping` for a TSA |
 | Hash policy | MD5/SHA-1 alone are not collision-resistant | Always include `sha256`: `--hash sha256,md5` when an older record uses MD5 |
@@ -193,8 +193,9 @@ avoid in a report. Severities and full wording: [reports.md](reports.md#findings
 <!-- forge:domain -->
 | Code | Check next | Do not conclude |
 | --- | --- | --- |
-| `CERT_CHAIN_VALID` | The anchor named; `at`; any `REVOCATION_UNKNOWN`, weak-crypto or trust-list findings beside it; re-run with `openssl verify` | That the holder signed the document, or that the anchor deserves trust |
-| `CERT_CHAIN_UNTRUSTED` | The depth and OpenSSL code: a missing intermediate (add it to the run), the wrong anchor, or another error (24, 25, 34…) | That the certificate is false |
+| `CERT_CHAIN_VALID` | The anchor named; `at`; the revocation findings beside it (`REVOCATION_UNKNOWN` means revocation was **not** established); weak-crypto or trust-list findings; re-run with `openssl verify` | That the certificate was not revoked, that the holder signed the document, or that the anchor deserves trust |
+| `CERT_CHAIN_UNTRUSTED` | The depth and OpenSSL code: a missing intermediate (add it to the run) or the wrong anchor. With a `tl:` anchor, `service` / `service_status` name a listed service that was not granted (withdrawn, suspended…) at `--at` | That the certificate is false |
+| `CERT_CHAIN_INVALID` | OpenSSL's code and reason at the depth given (e.g. 25 path length, 32 / 79 CA without keyCertSign, 34 critical extension); `certificate.txt` of that depth | That the certificate was forged |
 | `CERT_SIGNATURE_INVALID` | Re-export the certificate; check it against the issuer the chain chose | Who altered it |
 | `CERT_EXPIRED_AT_DATE` / `CERT_NOT_YET_VALID_AT_DATE` | Whether `--at` is the signing time; time zones; re-run at the right instant | That a signature made earlier is invalid; back-dating |
 | `CERT_REVOKED` | The revocation date versus the signing date; the reason; the source (CRL or OCSP, SHA-256) | Wrongdoing by the holder; invalidity of earlier signatures |
@@ -207,7 +208,7 @@ avoid in a report. Severities and full wording: [reports.md](reports.md#findings
 | `CERT_NOT_IN_TRUST_LIST` | Whether the right list and a current snapshot were used | Invalidity |
 | `CERT_ISSUED_BY_RAKVOR_INTERNAL` | Nothing: it discloses an internal certificate | Any legal presumption |
 | `KEY_MATCHES_CERTIFICATE` / `KEY_DOES_NOT_MATCH` / `KEY_NOT_PAIRED` | How the key was found; which certificate it was supplied with | Who used the key; tampering |
-| `TIMESTAMP_TOKEN_VALID` / `_INVALID` | Compare the imprint with the data's digest by hand (`openssl ts -verify -data`); the reasons listed | Which file it covers; that the stated time is false |
+| `TIMESTAMP_TOKEN_VALID` / `_INVALID` | `imprint_checked` and `imprint_file`: the token is checked against the evidence file of the same stem in the run (`data.tsr` ↔ `data`, `data.*`); with `imprint_checked=no` it is not linked to any file, so compare by hand (`openssl ts -verify -data`); the reasons listed | With `imprint_checked=no`, which file it covers; that the stated time is false |
 | `PKCS12_UNREADABLE` | Supply the password (`RV_P12_PASSWORD`) and re-run | Damage |
 | `CRYPTO_INPUT_UNPARSABLE` / `ANALYSIS_STEP_FAILED` | The error; re-export the object; fix the anchor file | Tampering |
 | `EVIDENCE_CHANGED_DURING_READ` | Another program writing to the evidence; storage; re-run on a stable copy | Who changed it |
@@ -236,7 +237,8 @@ written, `run_cancelled` is logged, exit code 130.
 
 | Task | Command | Guide |
 | --- | --- | --- |
-| Rakvor root, intermediate, code signing, examiner `.p12`, TLS, test TSA | `pki init-root`, `pki issue --profile …`, `pki import` | [company-pki.md](company-pki.md) |
+| Rakvor root, intermediate, code signing, examiner `.p12`, TLS, test TSA | `pki init-root`, `pki issue --profile …` (key type defaults per profile; an examiner key must be RSA), `pki import [--issuer-cert]` | [company-pki.md](company-pki.md) |
+| CRL URL written into future certificates (never edit `ca.json` by hand) | `pki set --crl-url URL` | [company-pki.md](company-pki.md) |
 | Revoke, CRL, lab OCSP response | `pki revoke`, `pki crl`, `pki ocsp-sign` | [company-pki.md §8](company-pki.md#8-renewal-and-revocation) |
 | State and integrity of a CA folder | `pki show`, `pki verify` | [forensic-audit.md](forensic-audit.md#creation-runs-and-the-ca-folders-issuedjsonl) |
 | CSR for a public or qualified CA | `csr new`, `csr show` | [company-pki.md §7](company-pki.md#7-csrs-for-a-public-or-qualified-ca) |
@@ -256,8 +258,9 @@ rv-certcheck analyze -i D:\lab\full-1\revoked-by-crl\leaf.crt -i D:\lab\full-1\c
 # expected: CERT_REVOKED (plus CERT_ISSUED_BY_RAKVOR_INTERNAL: lab certificates carry the Rakvor lab policy)
 ```
 
-`trust-list` commands do not write an audit run in this version; the snapshot itself records its source, import
-time and SHA-256, and the anchors resolved from it are logged by every `analyze` run that uses them.
+`trust-list import`, `list` and `show` each write an audited run under `--out`, like the creation commands; the
+snapshot itself records its source, import time and SHA-256, and the anchors resolved from it are logged by every
+`analyze` run that uses them. An altered snapshot is refused (exit 3).
 
 ## 6. Timestamps
 
@@ -399,7 +402,9 @@ SHA256).Hash.ToLower()` and search the value in `audit.jsonl`.
 | `system store not available on this platform in v0.1 (the Windows ROOT store is not read)` | Export the root and use `--anchor FILE` |
 | `no eu trust-list snapshot in … (import one with trust-list import)` | Run `trust-list import --list eu FILE` first, or set `RV_CERTCHECK_DATA` |
 | `trust-list snapshot … was altered: SHA-256 …, recorded …` | The stored snapshot was edited: re-import from the source file |
-| `--at signing-time: the item has no signing time, so the chain was judged now` (verdict note) | Give the date explicitly with `--at` (v0.1) |
+| `--at signing-time: the item has no signing time, so the chain was judged now` (verdict note; the run also prints `AT_SIGNING_TIME_TOKENS_ONLY_V01`) | Give the date explicitly with `--at` (v0.1); timestamp tokens are the exception |
+| `the examiner profile needs an RSA key (… given)` (exit 3) | Use `--key-type rsa-3072` (the default) or `rsa-4096`: rv-hashinv signs reports with RSA only. `--allow-non-rsa-examiner` only for a certificate that will not sign reports |
+| `ca.json (record …) was modified after it was recorded` / `crl/latest.crl is not the newest recorded CRL` (exit 3) | Someone changed the CA folder outside the tool: restore the recorded file from backup and investigate; change `crl_url` only with `pki set` |
 | `OpenSSL walk stopped after error … : later checks of the path could not be run` (verdict note) | Fix or explain the first error; the other checks of that path were not run |
 | `creating a root CA key on a token needs --confirm-root` | Follow the key ceremony, then add `--confirm-root` |
 | `the client-internal profile is disabled in v0.1` | Expected: client certificates wait for the CP/CPS |

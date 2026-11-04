@@ -146,11 +146,22 @@ rv-certcheck pki import --ca E:\rakvor-pki\issuing-2026 --ca-id rakvor-issuing-2
   --key-file E:\rakvor-pki\issuing-2026.key.p8 --pass-env ISSUING_KEY_PASS --out E:\rakvor-pki\runs
 ```
 
-`pki import` refuses a key that does not match the certificate. The intermediate's certificate is distributed with
-the root (every chain sent to a verifier includes it).
+`pki import` refuses a key that does not match the certificate. Add `--issuer-cert E:\rakvor-pki\root-2026\certs\ca.crt`
+to record the root as the parent: the tool checks that it issued the intermediate (name and signature) and writes
+its SHA-256 to `parent_certificate_sha256` in `ca.json`; the issuer's subject and key id (`parent_subject`,
+`parent_key_id_hex`) are recorded from the intermediate in any case. The intermediate's certificate is distributed
+with the root (every chain sent to a verifier includes it).
 
-Optional: to publish CRLs over HTTP, add `"crl_url": "http://pki.rakvor.co/issuing-2026.crl"` to the issuing CA's
-`ca.json`; every certificate issued afterwards carries it as its CRL distribution point.
+Optional: to publish CRLs over HTTP, set the CRL distribution point with `pki set`; every certificate issued
+afterwards carries it (certificates already issued keep what they have):
+
+```powershell
+rv-certcheck pki set --ca E:\rakvor-pki\issuing-2026 --crl-url http://pki.rakvor.co/issuing-2026.crl --out E:\rakvor-pki\runs
+```
+
+**Do not edit `ca.json` by hand.** Every version the tool writes is recorded in `issued.jsonl` (a `ca_json_written`
+record with its SHA-256), so a hand edit (of `crl_url`, `allowed_profiles` or anything else) makes `pki verify` and
+every later operation refuse the folder (exit 3). `pki set --crl-url ""` clears the URL.
 
 ## 3. The code-signing certificate for releases
 
@@ -211,7 +222,10 @@ Hand it over in person with the password given separately. The examiner signs re
 rv-hashinv scan --input D:\evidence --sign-cert ana-ruiz.p12 --sign-pass-env RV_SIGN_PASSWORD ...
 ```
 
-rv-hashinv signs PDFs with RSA keys only: keep `--key-type rsa-2048`, `rsa-3072` or `rsa-4096` for examiners.
+rv-hashinv signs PDFs with RSA keys only, so the examiner profile defaults to `rsa-3072` and refuses an EC or
+Ed25519 key (exit 3). `--allow-non-rsa-examiner` overrides the refusal for a certificate that will not sign
+rv-hashinv reports. Without `--key-type` every profile uses its default: p-384 intermediate, p-256 tsa and
+tls-server, rsa-3072 code-signing and examiner, rsa-4096 for `init-root`.
 
 ## 5. Internal TLS
 
@@ -274,8 +288,11 @@ its own CRL at each ceremony (for revoked intermediates). For lab and test work,
 response for one serial; there is no OCSP server.
 
 **Integrity.** Run `rv-certcheck pki verify --ca <FOLDER>` before each session. It checks the `issued.jsonl` hash
-chain, `certs\ca.crt` and the SHA-256 of every certificate, CRL and OCSP file recorded; an edited, deleted or
-re-ordered record, or a modified file, stops the CA (exit 3) until it is investigated.
+chain, `certs\ca.crt`, the latest recorded `ca.json`, that `crl\latest.crl` is the newest recorded CRL, and the
+SHA-256 of every certificate, CRL and OCSP file recorded; an edited, deleted or re-ordered record, or a modified
+file, stops the CA (exit 3) until it is investigated. Every operation runs the same check first. A CA folder made
+before this check existed has no `ca_json_written` record and is refused: re-create it, or re-import its
+certificate and key into a new folder.
 
 ## Quick reference
 
@@ -288,5 +305,6 @@ re-ordered record, or a modified file, stops the CA (exit 3) until it is investi
 | From a CSR | `pki issue --ca ISSUING --profile tls-server --csr FILE` |
 | CSR for an external CA | `csr new ... --csr-out FILE` |
 | Revoke, CRL | `pki revoke --serial S --reason R`, `pki crl` |
+| CRL URL of future certificates | `pki set --ca FOLDER --crl-url URL` |
 | State and integrity | `pki show`, `pki verify`, `verify-log <RUN>` |
 | Training material | `lab make --set full --seed N --lab-out DIR` |

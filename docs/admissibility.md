@@ -583,14 +583,16 @@ Printed in every statistics and technical report ([i18n/en.json](../i18n/en.json
 | `TRUST_LIST_SIGNATURE_NOT_VERIFIED_V01` | In version 0.1 the trust list's own XAdES signature is not verified; the snapshot's source and SHA-256 are recorded so it can be checked independently. The Colombian list is a curated file, because ONAC publishes no machine-readable list. |
 | `RAKVOR_CERTIFICATES_ARE_INTERNAL_USE` | Certificates issued by Rakvor's internal PKI are for internal use only: they are not a firma digital under Ley 527 de 1999, art. 28 (Colombia), and not qualified certificates under eIDAS (Regulation (EU) No 910/2014). |
 | `NO_VALIDATED_ERROR_RATES_YET` | The tool's results have been compared with OpenSSL and Python reference implementations on test sets, but no error rate has yet been measured on a validated corpus. |
-| `CLEAN_RESULT_IS_NOT_AUTHENTICITY` | A result without findings does not show that a file is genuine or unaltered before acquisition. (Catalogue wording: "does not prove that a file is authentic".) |
+| `CLEAN_RESULT_IS_NOT_AUTHENTICITY` | A result without findings does not prove that a file is authentic or unaltered before acquisition. |
 | `TIMESTAMPS_FROM_FILESYSTEM` | Modification times come from the file system of the examined copy and may differ from the original source. |
-| `TIMESTAMP_PROVES_EXISTENCE_ONLY` | A trusted timestamp of the audit log shows that the log existed in that form at the stated time, not that the examined copy matches the original source. |
+| `TIMESTAMP_PROVES_EXISTENCE_ONLY` | A trusted timestamp of the audit log shows that the log existed in this exact form at the stated time; it does not show that the examined copy matches the original source. (The code name is shared by every Rakvor tool and RV Hub, so it is kept; the text no longer says "proves".) |
 
-Limits of v0.1 that are **not** printed as a limitation code but matter in court: `--at signing-time` falls back to
-*now* (G29); a timestamp token's imprint is not compared with any evidence file during `analyze` (G30); the
-`system` anchor is not available on Windows (G31); the tool trusts every service of a trust-list snapshot whatever
-its status (G32).
+A run with `--at signing-time` also prints `AT_SIGNING_TIME_TOKENS_ONLY_V01`: only timestamp tokens have a signing
+time in v0.1; every other item was judged now (G29).
+
+Limits of v0.1 that are **not** printed as a limitation code but matter in court: a timestamp token without an
+evidence file of the same stem in the run is not linked to any file (`imprint_checked=no`, G30); the `system`
+anchor is not available on Windows (G31).
 
 ## Consolidated gap list
 
@@ -634,12 +636,14 @@ Gaps specific to this tool's domain (certificates):
 | G26 | Sample scripts checking the tool's output — **closed**: `run.sh` and `run.ps1` compare the tool's `hashes.csv` (size, SHA-256, MD5) with `expected_hashes.csv` and fail on any difference; `src/cli/tests/analyze_sample.rs` checks `expected_findings.json`; kept for numbering | — | — | — | — |
 | G27 | **Trust-list signatures not verified in v0.1**: the XAdES signature of an EU TL or LOTL is not checked; the LOTL's pointers are not followed | EU-6, EU-8 | Download the TL from the official location, record its source and SHA-256 (the snapshot does), and verify its signature with a dedicated tool (e.g. EU DSS) | XAdES verification of TLs (v0.2) | Eng. |
 | G28 | **The Colombian list is curated by hand**: ONAC publishes no machine-readable list of accredited ECDs; the CSV may be incomplete or out of date | CO-L12, CO-L16 | Check each relied-on row against ONAC's published accreditation on the day; keep `source_url` and `checked_utc`; state the snapshot id in the report | Second-person review of each CSV update; signed CSV; refresh schedule | Firm + Eng. |
-| G29 | **`--at signing-time` falls back to now** until core supplies the signing time (`ChainRequest::signing_time` is always `None` in `analyze`); the verdict says `signing-time-unavailable-now` | CO-L11, EU-6 | Give the signing date explicitly with `--at`, from a timestamp token or another reliable record, and explain the choice | Read the signing time from signed objects (v0.2) | Eng. |
-| G30 | A timestamp token's message imprint is not compared with any evidence file during `analyze` (`TIMESTAMP_TOKEN_VALID` concerns the token and the TSA chain only) | CO-L16, EU-3 | Compare the imprint with the file's digest (`hashes.csv`) or run `openssl ts -verify -data FILE` | Pair tokens with data items (same stem, `.tsr` + file) | Eng. |
+| G29 | **`--at signing-time` uses a signing time only for timestamp tokens**: a token's TSA chain is judged at its genTime; every other item has no signing time in v0.1 and is judged now (verdict `at_source` `signing-time-unavailable-now`; the run prints `AT_SIGNING_TIME_TOKENS_ONLY_V01` and audits it as `run_note`) | CO-L11, EU-6 | Give the signing date explicitly with `--at`, from a timestamp token or another reliable record, and explain the choice | Read the signing time from signed objects (v0.2) | Eng. |
+| G30 | Timestamp imprint pairing — **partly closed**: a token is compared with the evidence file of the same stem in the run (`data.tsr` ↔ `data`, `data.*`; mismatch → `TIMESTAMP_TOKEN_INVALID` "imprint does not match <file>"). A token without such a file is still valid with `imprint_checked=no` and is not linked to any file | CO-L16, EU-3 | Name the data file after its token (or the reverse), or compare the imprint with `hashes.csv` / `openssl ts -verify -data` | Pair by imprint digest across the case registry | Eng. |
 | G31 | **The `system` anchor is Unix-only for now**: on Windows the ROOT store is not read in v0.1 and `--anchor system` is refused; on Unix it reads the distribution CA bundle | — | Export the root and use `--anchor FILE` | Read the Windows ROOT store | Eng. |
-| G32 | A trust-list anchor trusts every certificate of every service of the snapshot, whatever the service type (CA/QC, TSA, …) and status (granted, withdrawn); the status at the date is only reported in `CERT_IN_TRUST_LIST` | CO-L12, EU-7, EU-8 | Read `CERT_IN_TRUST_LIST` (service, status at the date) for every chain that relies on a TL anchor | Option to trust only services of a given type with a granted/accredited status at the date | Eng. |
+| G32 | Trust-list anchors by status and type — **closed**: only certificates of CA/QC or CA/PKC services (and, for timestamping, TSA services) whose status at `--at` is granted, recognised at national level or accredited (history included) are anchors; a path to a withheld one is `CERT_CHAIN_UNTRUSTED` naming the service and its status. Statuses such as `undersupervision` (pre-eIDAS) are not accepted; kept for numbering | — | — | — | — |
 | G33 | **Rakvor-issued certificates are internal use only**: not a *firma digital* (Ley 527 art. 28), not qualified (eIDAS); client certificates wait for a CP/CPS reviewed by counsel | CO-L17, EU-9, G3 | Disclosed in every certificate and report (F29, F30) | CP/CPS; for legal effect, certificates from an accredited ECD or a QTSP (CSR route, [company-pki.md](company-pki.md#7-csrs-for-a-public-or-qualified-ca)) | Firm + Counsel |
-| G34 | RV Hub discovery: the `describe` subcommand is not implemented in this build | — | Register the tool in RV Hub by hand | Add `describe --json` (`rakvor.describe/1`) | Eng. |
+| G34 | RV Hub discovery — **closed**: `rv-certcheck describe --json` (`rakvor.describe/1`, hidden from `--help`, listed in usage-cli.md) and `rv-certcheck-gui.exe --case-dir`; kept for numbering | — | — | — | — |
+| G35 | CA folder integrity — **closed**: `ca.json` is recorded in `issued.jsonl` whenever the tool writes it (`ca_json_written`, SHA-256) and `crl/latest.crl` must be the newest recorded CRL; a hand edit (e.g. `crl_url`, `allowed_profiles`) fails `pki verify` and every operation (exit 3). `pki set --crl-url` is the recorded change. A CA folder created before this check has no such record and is refused | ISO-1, CO-L17 | — | — | — |
+| G36 | Unmapped OpenSSL verify errors (13, 14, 24, 25, 32, 34, 37, 79, …) are reported as `CERT_CHAIN_INVALID` with OpenSSL's code and reason — **closed** (they were reported as `CERT_CHAIN_UNTRUSTED`) | — | — | — | — |
 <!-- /forge:domain -->
 
 ## Examiner checklist before filing a report
@@ -694,9 +698,11 @@ Domain steps for this tool:
     `REVOCATION_UNKNOWN` is explained; every `--online` fetch is listed (`revocation_fetched`).
 21. **Second opinion**: each relied-on verdict was re-run with `openssl verify -attime <epoch> -purpose <p>
     [-crl_check -CRLfile <crl>] -CAfile <anchors> -untrusted <intermediates> <cert>` and the output kept (G5).
-22. **Trust lists**: for `CERT_IN_TRUST_LIST`, the service type and the status at the date were read; the EU TL
+22. **Trust lists**: for `CERT_IN_TRUST_LIST`, the service type and the status at the date were read (only
+    granted / recognised / accredited CA services, and TSA services for timestamps, anchor a chain); the EU TL
     signature was verified with a separate tool (G27); Colombian rows were re-checked against ONAC (G28).
-23. **Timestamp tokens** relied on: the imprint was compared with the digest of the data (G30).
+23. **Timestamp tokens** relied on show `imprint_checked=yes` with the right `imprint_file`, or the imprint was
+    compared with the digest of the data by hand (G30).
 24. **No Rakvor internal certificate** (`CERT_ISSUED_BY_RAKVOR_INTERNAL`) is presented as a *firma digital* or a
     qualified certificate (G33).
 25. **`ANALYSIS_STEP_FAILED`, `CRYPTO_INPUT_UNPARSABLE` and `PKCS12_UNREADABLE`** items were re-examined or

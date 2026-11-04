@@ -167,29 +167,32 @@ Creation runs request no RFC 3161 timestamp; add one with `rv-certcheck timestam
 dated by a third party (e.g. after a key ceremony).
 
 **`issued.jsonl`** (in the CA folder, schema `rakvor.ca/1`) holds one record per CA operation: `ca_created`,
-`ca_imported`, `issued`, `revoked`, `crl_issued`, `ocsp_signed`, with serial, profile, subject, validity,
+`ca_imported`, `ca_json_written`, `issued`, `revoked`, `crl_issued`, `ocsp_signed`, with serial, profile, subject, validity,
 certificate SHA-256, file and file SHA-256, revocation reason and time, CRL number, the key's location (never the
 key), actor and tool version. It is chained exactly like `audit.jsonl`:
 
 ```mermaid
 flowchart LR
     G["000…000"] --> R1["#1 ca_created<br/>certs/ca.crt + SHA-256"]
-    R1 --> R2["#2 issued<br/>serial, profile, cert SHA-256"]
-    R2 --> R3["#3 revoked<br/>serial, reason, time"]
-    R3 --> R4["#4 crl_issued<br/>crl/1.crl + SHA-256"]
-    R2 -. "ca_log_appended (entry_hash of #2)" .-> A["run audit.jsonl<br/>of pki issue"]
-    R4 -. "ca_log_appended (entry_hash of #4)" .-> B["run audit.jsonl<br/>of pki crl"]
+    R1 --> R1b["#2 ca_json_written<br/>ca.json + SHA-256"]
+    R1b --> R2["#3 issued<br/>serial, profile, cert SHA-256"]
+    R2 --> R3["#4 revoked<br/>serial, reason, time"]
+    R3 --> R4["#5 crl_issued<br/>crl/1.crl + SHA-256"]
+    R4 --> R5["#6 ca_json_written<br/>next_crl_number"]
+    R2 -. "ca_log_appended (entry_hash of #3)" .-> A["run audit.jsonl<br/>of pki issue"]
+    R4 -. "ca_log_appended (entry_hash of #5, #6)" .-> B["run audit.jsonl<br/>of pki crl"]
 ```
 
 - **Before every operation** the tool re-verifies the whole chain, that the first record creates or imports this
-  CA's certificate, that `certs/ca.crt` is the certificate recorded in `ca.json`, and the SHA-256 of every file a
-  record names. Any difference stops the CA: nothing is issued until a person investigates.
+  CA's certificate, that `certs/ca.crt` is the certificate recorded in `ca.json`, the SHA-256 of every file a
+  record names (for `ca.json`, its latest `ca_json_written` record), and that `crl/latest.crl` is the newest
+  recorded CRL. Any difference stops the CA: nothing is issued until a person investigates.
 - `rv-certcheck pki verify --ca <FOLDER>` runs the same check on demand (exit 3 when broken); run it at the start
   of every session and before handing a CA folder to a reviewer. `pki show` lists every certificate with its
   revocation state.
-- What the chain does **not** cover: `ca.json` is outside it (its certificate digest is cross-checked; fields such
-  as `crl_url` or `allowed_profiles` are not), `crl/latest.crl` is an unrecorded copy, and removing the last
-  records of `issued.jsonl` leaves a valid shorter chain. The `ca_log_appended` entries of the creation runs, and
+- `ca.json` is changed only by the tool (`pki set --crl-url` for the CDP); a hand edit of any field stops the CA.
+- What the chain does **not** cover: removing the last records of `issued.jsonl` (with the files they name rolled
+  back to match) leaves a valid shorter chain. The `ca_log_appended` entries of the creation runs, and
   their timestamps, are the outside record of its length.
 - Key files are created owner-only and never overwritten; token keys are referenced by token serial and key id.
 

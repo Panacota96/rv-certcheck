@@ -107,7 +107,8 @@ in 2023 with a certificate valid until 2024 was signed with a valid card; checki
 which is true and irrelevant. What matters for a signature is whether the card was valid **when the signature was
 made**. To know when it was made, you need a reliable time: a trusted timestamp ([A7](#a7-trusted-timestamps-a-notary-for-a-fingerprint)),
 not the date the signer typed. In this version the examiner gives that date with `--at`; `--at signing-time`
-cannot yet read it from the signed object and falls back to *now*, saying so in the verdict.
+uses the time of a timestamp token for the token's own TSA, but cannot yet read a time from other signed objects:
+those fall back to *now*, and the report says so.
 
 ## A6 Revocation: the list of cancelled cards
 
@@ -297,13 +298,14 @@ The verdict is mapped from OpenSSL's codes as follows (`validate_chain()`):
 | 26, 39 (invalid purpose / key usage lacks digitalSignature) | `CERT_PURPOSE_MISMATCH` | `invalid` |
 | 47–49, 51–53 (name-constraint violations and unsupported constraints) | `CERT_NAME_CONSTRAINT_VIOLATION` | `invalid` |
 | 3, 5, 8, 11, 12, 15, 16, 33, 35, 36, 44, 54 (CRL missing, undecodable, bad signature, not yet valid, expired, bad dates, issuer, key usage, critical extension, scope, path) | `REVOCATION_UNKNOWN` | `invalid` |
-| any other code (e.g. 13/14 bad notBefore/notAfter field, 24 no issuer public key, 25 path length exceeded, 32 issuer lacks keyCertSign, 34 unhandled critical extension, 37 CA certificate used as CA without CA:TRUE) | `CERT_CHAIN_UNTRUSTED` with OpenSSL's reason and code | `invalid` |
-| none | `CERT_CHAIN_VALID` (subject, anchor, instant) | `valid` |
+| any other code (e.g. 13/14 bad notBefore/notAfter field, 24 no issuer public key, 25 path length exceeded, 32 issuer lacks keyCertSign, 34 unhandled critical extension, 37 CA certificate used as CA without CA:TRUE, 79 invalid CA certificate) | `CERT_CHAIN_INVALID` (high) with OpenSSL's code, reason and depth: the path was examined and is invalid, not untrusted | `invalid` |
+| none | `CERT_CHAIN_VALID` (subject, anchor, instant): the chain verified; revocation is reported separately | `valid` |
 
 The status is `untrusted` whenever any untrusted-class code was found, else `invalid` whenever any error, a
 revoked node or a failed tool policy check (document signing) was found, else `valid`. `CERT_CHAIN_VALID` can
 coexist with `REVOCATION_UNKNOWN`, `CERT_WEAK_KEY` or `CERT_WEAK_SIGNATURE_ALGORITHM`: OpenSSL accepts those, and
-the tool reports them as separate findings.
+the tool reports them as separate findings. Its wording says so: the chain verified, and revocation is a separate
+finding (`CERT_REVOKED` or `REVOCATION_UNKNOWN`).
 
 ## B5 Collecting every error: the re-run approach
 
@@ -352,11 +354,13 @@ flowchart TD
 | RFC 3339 (`2025-03-14T09:30:00-05:00`) | Converted to UTC | `given` |
 | `signing-time` | The signing time **supplied by the caller**; none supplied → now | `signing-time`, or `signing-time-unavailable-now` with a note |
 
-**v0.1 limit.** Core never supplies a signing time to the chain check (`ChainRequest::signing_time` is always
-`None` in [certscan.rs](../src/core/src/certscan.rs)), so `--at signing-time` always judges *now* in `analyze`
-and says so in each verdict. Give the date explicitly (`--at 2025-03-14`) until the signed-document support of
-v0.2 reads it from the object. The TSA certificate of an RFC 3161 token is the exception: it is always judged at
-the token's genTime ([B8](#b8-rfc-3161-tokens-and-ess-signing-certificate)).
+**v0.1 limit.** Only a timestamp token (`.tsr`, `.tst`) has a signing time: its genTime, at which its own TSA
+chain is judged (always, whatever `--at`; [B8](#b8-rfc-3161-tokens-and-ess-signing-certificate)). Every other
+item has no signing time yet (`ChainRequest::signing_time` is `None` in
+[certscan.rs](../src/core/src/certscan.rs)), so `--at signing-time` judges its chains *now* and says so in each
+verdict (`signing-time-unavailable-now`). The run also prints the note `AT_SIGNING_TIME_TOKENS_ONLY_V01` with the
+limitations of every report and records it as `run_note` in the audit log. Give the date explicitly
+(`--at 2025-03-14`) until the signed-document support of v0.2 reads it from the object.
 
 All times are compared as UTC seconds. Why an expired certificate can be fine: RFC 5280 judges validity at the
 validation time; for a signature the relevant time is the signing time, which needs independent evidence (a
@@ -427,13 +431,18 @@ strict decoders reject them). Verification, each step reported separately (`veri
 4. The TSA certificate's chain is valid **at genTime** for purpose `timestamping` (OpenSSL's
    `X509_PURPOSE_TIMESTAMP_SIGN`), through the same `validate_chain()` with the run's anchors, CRLs and OCSP.
 5. genTime is inside the TSA certificate's validity period.
-6. With data supplied: its digest with the token's hash algorithm equals the messageImprint.
+6. The messageImprint is compared with the evidence file **of the same stem** in the run, paired the way keys
+   are paired with certificates (`data.tsr` ↔ `data`, `data.txt`, `data.bin`; other tokens excluded): core
+   streams the file through the token's hash algorithm (`ImprintHasher`) while re-hashing it with the run's
+   first-pass algorithm (a file that changed since it was hashed is not accepted), and passes the result as an
+   `ImprintCheck` (`verify_timestamp_token_checked()`). The first paired file that matches is the one named;
+   when none matches the token is invalid with `imprint does not match <file(s)>`.
 
-All steps pass → `TIMESTAMP_TOKEN_VALID` (genTime, TSA, policy, hash algorithm); any failure →
-`TIMESTAMP_TOKEN_INVALID` with every reason; the TSA chain's own findings are added. **v0.1 limit:** `analyze`
-calls step 6 with no data (`verify_timestamp_token(&token, None, …)` in certscan.rs), so the token is not linked
-to any evidence file during a run; compare the imprint with the file's digest by hand (`hashes.csv`, or
-`openssl ts -verify -data FILE -in TOKEN.tsr -CAfile …`). The audit log's own timestamp is handled separately by
+All steps pass → `TIMESTAMP_TOKEN_VALID` (genTime, TSA, policy, hash algorithm, `imprint_checked` yes/no,
+`imprint_file`); any failure → `TIMESTAMP_TOKEN_INVALID` with every reason; the TSA chain's own findings are added.
+With no paired file the token is reported valid with `imprint_checked=no`, `imprint_file=none`, and its wording
+says it is **not linked to any file**: it shows only that some data with that digest existed at genTime. Compare
+it by hand in that case (`hashes.csv`, or `openssl ts -verify -data FILE -in TOKEN.tsr -CAfile …`). The audit log's own timestamp is handled separately by
 the core ([B17](#b17-audit-chain-case-folder-timestamp-of-the-log)).
 
 ## B9 Weak key and signature thresholds
@@ -532,29 +541,41 @@ and refuses one that no longer matches. Data folder: `%LOCALAPPDATA%\Rakvor\rv-c
 `$XDG_DATA_HOME/rakvor/rv-certcheck` or `~/.local/share/rakvor/rv-certcheck` elsewhere; `RV_CERTCHECK_DATA`
 overrides it.
 
-**Use as anchors.** `--anchor tl:eu@ID` (or `@latest`) trusts **every certificate of every service** of the
-snapshot, whatever the service type and status. Membership is then looked up per node, by certificate SHA-256,
-else by subject + SKI; the service's status **at the validation instant** is taken from its history (periods
-closed by the next period's start). `CERT_IN_TRUST_LIST` names the list, snapshot, service and status at the
-date; `CERT_NOT_IN_TRUST_LIST` (low) is reported when no node is a service identity. **Read the status**: a chain
-to a withdrawn or a TSA service still validates against such an anchor, and `CERT_CHAIN_VALID` alone does not
-say the service was granted or of the right type.
+**Use as anchors.** `--anchor tl:eu@ID` (or `@latest`) trusts a listed certificate only when one of the services
+that list it, at the validation instant (`--at`; status history included, periods closed by the next period's
+start):
+
+- has a status of **granted** or **recognisedatnationallevel** (ETSI TS 119 612 v2,
+  `http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/…`), **accredited** (v1 `…/Svcstatus/accredited`) or, in the
+  Colombian CSV, `accredited`. Every other status (withdrawn, deprecatedatnationallevel, suspended,
+  undersupervision, supervisionincessation, …) and "not listed at that date" withholds it;
+- is of an accepted **type**: `CA/QC` or `CA/PKC` for every purpose, and the TSA types (`TSA`, `TSA/QTST`,
+  `TSA/TSS-QC`, `TSA/TSS-AdESQCandQES`) only for the purpose `timestamping` (the TSA chain of an RFC 3161 token).
+
+A withheld certificate is offered to OpenSSL as an untrusted certificate, so a path that ends in it is built and
+reported `CERT_CHAIN_UNTRUSTED` whose reason names it, with the params `trust_list`, `service` and
+`service_status` (the status at that date); the verdict's `notes` list every withheld certificate. A listed
+certificate that is not self-signed (a TSA unit, a subordinate CA) is accepted as the anchor itself
+(X509_V_FLAG_PARTIAL_CHAIN), as the list names the service's own certificate. Membership is then looked up per
+node, by certificate SHA-256, else by subject + SKI: `CERT_IN_TRUST_LIST` names the list, snapshot, service and
+status at the date; `CERT_NOT_IN_TRUST_LIST` (low) is reported when no node is a service identity.
 
 ## B15 PKI creation
 
 **CA folder** (schema `rakvor.ca/1`):
 
 ```text
-<CA>/ca.json                       CaFolder (rewritten only to advance next_crl_number)
+<CA>/ca.json                       CaFolder; every version written is recorded (ca_json_written + SHA-256)
 <CA>/issued.jsonl                  one hash-chained record per operation
 <CA>/certs/ca.crt                  the CA certificate (PEM); certs/<serial>.crt for every certificate issued
-<CA>/crl/<n>.crl, crl/latest.crl   every CRL (DER); latest.crl is a copy of the newest
+<CA>/crl/<n>.crl, crl/latest.crl   every CRL (DER, recorded); latest.crl must equal the newest recorded CRL
 <CA>/ocsp/<serial>-<time>.der      every OCSP response signed (lab use)
 <CA>/keys/                         encrypted CA key (0600, directory 0700); a token key is only referenced
 ```
 
 Every mutating operation takes the folder lock, re-verifies `issued.jsonl` and the SHA-256 of every file a record
-names, unlocks the CA key, checks that it is the key of `certs/ca.crt`, acts, verifies the result with OpenSSL
+names (for a file recorded several times, such as `ca.json`, its latest record), checks that `ca.json` is recorded
+and that `crl/latest.crl` is the newest recorded CRL, unlocks the CA key, checks that it is the key of `certs/ca.crt`, acts, verifies the result with OpenSSL
 (signature over the new certificate or CRL), and appends a record. A broken chain, a modified recorded file or a
 key that does not match stops the CA (exit 3, nothing issued).
 
@@ -563,7 +584,7 @@ internal policy with its user notice, and the CDP of `ca.json` `crl_url` when se
 
 | Profile | basicConstraints | keyUsage (critical) | extendedKeyUsage | Library default key |
 | --- | --- | --- | --- | --- |
-| root (`pki init-root`) | CA:TRUE, no path length (critical) | keyCertSign, cRLSign | — | (given by the caller) |
+| root (`pki init-root`) | CA:TRUE, no path length (critical) | keyCertSign, cRLSign | — | rsa-4096 |
 | `intermediate` | CA:TRUE, pathlen 0 (critical) | keyCertSign, cRLSign | — | p-384 |
 | `code-signing` | CA:FALSE (critical) | digitalSignature | codeSigning (not critical) | rsa-3072 |
 | `examiner` | CA:FALSE | digitalSignature, nonRepudiation | emailProtection, documentSigning (RFC 9336), Microsoft document signing 1.3.6.1.4.1.311.10.3.12 (not critical) | rsa-3072 |
@@ -571,9 +592,12 @@ internal policy with its user notice, and the CDP of `ca.json` `crl_url` when se
 | `tls-server` | CA:FALSE | digitalSignature (+ keyEncipherment for RSA) | serverAuth; at least one `dns:` or `ip:` SAN required | p-256 |
 | `client-internal` | — | — | — | **refused in v0.1** (needs the CP/CPS reviewed by counsel) |
 
-The CLI always passes a key type: `--key-type` defaults to **rsa-4096** for `pki init-root` and **rsa-3072** for
-`pki issue` and `csr new`, whatever the profile, so the library defaults of the last column apply only to other
-callers (the GUI or a script using the library). A new certificate's validity ends at the earlier of *now + validity days* and the CA's own notAfter; an expired CA
+Without `--key-type`, `pki issue` uses the library default of the last column (`pki::default_key_spec`), and
+`pki init-root` uses rsa-4096 (`pki::ROOT_DEFAULT_KEY_SPEC`); the GUI's Issue form switches to the same default
+when the profile changes. `csr new` defaults to rsa-3072. The **examiner** profile refuses an EC or Ed25519 key
+(ErrorKind::Policy, exit 3) unless `--allow-non-rsa-examiner` (`IssueOptions::allow_non_rsa_examiner`) is given,
+because rv-hashinv signs PDF reports with RSA keys only; a refusal is clearer than a certificate that silently
+cannot sign reports. A new certificate's validity ends at the earlier of *now + validity days* and the CA's own notAfter; an expired CA
 cannot issue. The examiner profile always creates a new file key and also writes `<serial>.p12` (key, examiner
 certificate, issuing CA certificate) next to the key file. Signature algorithms follow the CA key: RSA →
 sha256WithRSAEncryption (PKCS#1 v1.5), P-256 → ecdsa-with-SHA256, P-384 → ecdsa-with-SHA384, Ed25519 → Ed25519.
@@ -605,7 +629,7 @@ embedded), CertID with SHA-1, status `revoked` if a revocation record dated at o
 if the serial was issued, else `unknown`. There is no OCSP server.
 
 **`issued.jsonl`** ([issued.rs](../src/certs/src/create/issued.rs)): one record per operation (`ca_created`,
-`ca_imported`, `issued`, `revoked`, `crl_issued`, `ocsp_signed`) with serial, profile, subject, validity,
+`ca_imported`, `ca_json_written`, `issued`, `revoked`, `crl_issued`, `ocsp_signed`) with serial, profile, subject, validity,
 certificate SHA-256, file and file SHA-256, reason, CRL number, key *location*, actor and tool version. Chained
 exactly like `audit.jsonl`:
 
@@ -615,8 +639,12 @@ canonical       = keys sorted, no whitespace, UTF-8
 prev_entry_hash = the previous record's entry_hash (64 zeros for the first); seq = 1, 2, 3 …
 ```
 
-`ca.json` itself is not inside the chain: its `certificate_sha256` is cross-checked against the first record and
-the certificate file, but fields such as `crl_url` or `allowed_profiles` can be edited without breaking the chain.
+`ca.json` is covered by the chain: every version the tool writes (`init-root`, `import`, each `crl` that advances
+`next_crl_number`, `pki set --crl-url`) is followed by a `ca_json_written` record with its SHA-256, and the latest
+one must match the file. An edit of `crl_url`, `allowed_profiles` or any other field outside the tool therefore
+stops the CA. `pki set --crl-url URL` is the recorded way to change the CDP. An imported CA that is not
+self-signed records its issuer (`parent_subject`, `parent_key_id_hex` from the AKI) and, with `--issuer-cert`,
+the issuer certificate's SHA-256 (`parent_certificate_sha256`) after checking its name and signature.
 
 ## B16 Lab sets and determinism
 

@@ -45,7 +45,7 @@ flowchart LR
 | --- | --- |
 | Parse every certificate field (subject, issuer, serial, validity, SANs, key and size, signature algorithm, extensions, policy OIDs) and write an OpenSSL-style dump (`certificate.txt`) | Say that a certificate, a signature or a document is genuine or false: every result is an observation for the examiner |
 | Build and verify each chain with OpenSSL's verifier and report the OpenSSL code at **every depth** (`chain.json`) | Decide which roots deserve trust: that is the examiner's choice of `--anchor`, recorded in every report |
-| Judge the chain at a chosen instant (`--at`) for a chosen purpose (`--purpose`) | Read the signing time out of a signed object in v0.1: `--at signing-time` falls back to *now* (stated in the verdict) |
+| Judge the chain at a chosen instant (`--at`) for a chosen purpose (`--purpose`) | Read the signing time out of a signed object in v0.1: `--at signing-time` uses genTime for timestamp tokens only; other items fall back to *now* (stated in the verdict and the report) |
 | Check revocation from CRLs and OCSP responses supplied or found among the evidence; fetch them only with `--online` (every URL audited) | See a revocation it was not given: offline, revocation is as complete as the files supplied |
 | Verify RFC 3161 tokens (CMS signature, ESS signing-certificate, TSA chain at genTime) | Compare a token's message imprint with an evidence file during `analyze` (v0.1) |
 | Match private keys to certificates in memory | Copy, log or report a private key, a password or a PIN |

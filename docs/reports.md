@@ -51,7 +51,7 @@ log (`output_written`):
 | `certificates` | Every certificate of the item: subject, issuer (and their RDNs), serial, validity, SANs, key (algorithm, bits, curve, SPKI SHA-256), signature algorithm and OID, key usage, EKU, basic and name constraints, policy OIDs, AIA and CDP URLs, SKI/AKI, SHA-256 and SHA-1, self-signed, extension list |
 | `verdicts[]` | One per end-entity certificate: `status` (`valid` / `untrusted` / `invalid`), `at` (RFC 3339 UTC) and `at_source` (`now`, `given`, `signing-time`, `signing-time-unavailable-now`), `purpose`, `anchors`, `openssl_code` / `openssl_reason` (OpenSSL's first answer), `errors[]` (every error: depth, code, reason), `nodes[]`, `signals[]`, `notes[]` (how the verdict was reached), `online_fetches[]`, `openssl_version` |
 | `verdicts[].nodes[]` | Depth 0 first: `cert`, `status` (`ok` / `error` / `incomplete`), `openssl_code`, `openssl_reason`, `anchor` (which `--anchor` it matched), `revocation` (`good` / `revoked` / `unknown`, with the source's origin, SHA-256, thisUpdate, nextUpdate), `revocation_note`, `trust_list` (list, snapshot, provider, service, type, status at the date) |
-| `timestamp` | For a token: TSTInfo (genTime, policy, serial, hash algorithm, imprint, TSA name, nonce, accuracy, ordering, status), `signature_valid`, `imprint_matches` (always `null` in `analyze`, see [theory.md B8](theory.md#b8-rfc-3161-tokens-and-ess-signing-certificate)), `signer_chain` |
+| `timestamp` | For a token: TSTInfo (genTime, policy, serial, hash algorithm, imprint, TSA name, nonce, accuracy, ordering, status), `signature_valid`, `imprint_matches` and `imprint_file` (the paired evidence file; `null` when no file of the same stem was in the run, see [theory.md B8](theory.md#b8-rfc-3161-tokens-and-ess-signing-certificate)), `signer_chain` |
 | `key_match` | For a private key: `matches`, the certificates it matches or was paired with |
 | `errors[]` | Every certificate-layer call that failed (operation, error) |
 
@@ -80,8 +80,9 @@ below summarise the catalogue sentences printed in every technical review.
 
 | Code | Severity | What it shows | What it does not prove |
 | --- | --- | --- | --- |
-| `CERT_CHAIN_VALID` | info | OpenSSL built a path from the certificate to one of the chosen anchors and every check passed at the instant given: signatures, validity, purpose, constraints, and the revocation information **supplied** (may coexist with `REVOCATION_UNKNOWN`) | That the holder signed or approved any document; that the anchor deserves trust (the examiner's choice); that the result holds at another date |
-| `CERT_CHAIN_UNTRUSTED` | high | No path to any chosen anchor could be completed (OpenSSL code 2, 18–21, 27, 28 at the depth given), or OpenSSL reported another error that the tool does not map to a specific code (e.g. 24, 25, 34) | That the certificate is forged or invalid: the issuing CA may not be among the anchors, or an intermediate may be missing |
+| `CERT_CHAIN_VALID` | info | OpenSSL built a path from the certificate to one of the chosen anchors and the chain verified at the instant given: signatures, validity dates, purpose and constraints. **Revocation is reported separately**: `CERT_REVOKED`, or `REVOCATION_UNKNOWN` when it could not be determined (the two can coexist with this finding) | That the certificate was not revoked; that the holder signed or approved any document; that the anchor deserves trust (the examiner's choice); that the result holds at another date |
+| `CERT_CHAIN_UNTRUSTED` | high | No path to any chosen anchor could be completed (OpenSSL code 2, 18–21, 27, 28 at the depth given). With a `tl:` anchor, a path that ends in a listed certificate whose service is not granted / recognised / accredited at the instant names the list, the service and its status (`trust_list`, `service`, `service_status`) | That the certificate is forged or invalid: the issuing CA may not be among the anchors, or an intermediate may be missing |
+| `CERT_CHAIN_INVALID` | high | OpenSSL examined the path and rejected it with an error the tool does not map to a more specific finding (e.g. 13/14 bad notBefore/notAfter field, 24 issuer key unreadable, 25 path length exceeded, 32 issuer lacks keyCertSign, 34, 37, 79 invalid CA), with OpenSSL's code, reason and depth | Forgery or who produced the certificate: a malformed certificate or a misconfigured CA gives the same result |
 | `CERT_SIGNATURE_INVALID` | high | The signature on the certificate at that depth does not verify with its issuer's key (codes 4, 6, 7) | Who altered it or why; a damaged copy or a certificate attributed to the wrong issuer gives the same result |
 | `CERT_EXPIRED_AT_DATE` | high | notAfter is before the instant checked | That a signature made with it is invalid: what matters is validity at signing time |
 | `CERT_NOT_YET_VALID_AT_DATE` | high | notBefore is after the instant checked | Back-dating or forgery: a wrong `--at`, a wrong clock or a time-zone error gives the same result |
@@ -103,8 +104,8 @@ below summarise the catalogue sentences printed in every technical review.
 | `KEY_MATCHES_CERTIFICATE` | info | The private key's public half equals the public key of the certificates named | Who held or used the key, or that it was not copied elsewhere |
 | `KEY_DOES_NOT_MATCH` | high | The key is not the key of the certificate supplied with it (same item, or same file stem) | Which key is the right one, or tampering: keys and certificates are often mixed up when exported |
 | `KEY_NOT_PAIRED` | info | No certificate examined in the run has this key's public key | That the key is foreign or suspicious |
-| `TIMESTAMP_TOKEN_VALID` | info | The RFC 3161 token's status, CMS signature and ESS signing-certificate check out, and the TSA chain was valid at genTime for timestamping. In `analyze` the imprint is **not** compared with any file | That the timestamped data is genuine or who submitted it; which evidence file it covers |
-| `TIMESTAMP_TOKEN_INVALID` | high | One or more verification steps failed, all listed | That the time is false or the token forged: a missing TSA certificate or anchor gives the same result |
+| `TIMESTAMP_TOKEN_VALID` | info | The RFC 3161 token's status, CMS signature and ESS signing-certificate check out, and the TSA chain was valid at genTime for timestamping. The imprint is compared with the evidence file of the same stem in the run (`data.tsr` ↔ `data`, `data.*`): `imprint_checked=yes` with `imprint_file`; without such a file `imprint_checked=no`, `imprint_file=none`, and the token is **not linked to any file** | That the timestamped data is genuine or who submitted it; with `imprint_checked=no`, which file it covers |
+| `TIMESTAMP_TOKEN_INVALID` | high | One or more verification steps failed, all listed; a paired file whose digest differs gives the reason `imprint does not match <file>` | That the time is false or the token forged: a missing TSA certificate or anchor gives the same result |
 | `PKCS12_UNREADABLE` | medium | The PKCS#12 could not be opened (no password, wrong password, or an encryption this build cannot read); only what is readable without the password was examined | Damage or suspicious content; the password is never recorded |
 
 ### Glue and run integrity
@@ -131,11 +132,14 @@ below summarise the catalogue sentences printed in every technical review.
 | `REGISTRY_PATH_CONTENT_CHANGED` | medium (intake tools only) | A registered path now holds other content | Which version is the original |
 
 Limitations printed in every report: see [admissibility.md](admissibility.md#limitations-stated-in-every-report).
+A run with `--at signing-time` also prints `AT_SIGNING_TIME_TOKENS_ONLY_V01` (and records it as `run_note` in the
+audit log): only timestamp tokens have a signing time in v0.1; every other item was judged now.
 
 ```mermaid
 flowchart LR
     V{"verdict status"} -->|valid| OK["CERT_CHAIN_VALID<br/>+ policy findings"]
     V -->|untrusted| U["CERT_CHAIN_UNTRUSTED"]
+    V -->|invalid, unmapped code| X["CERT_CHAIN_INVALID"]
     V -->|invalid| I["CERT_SIGNATURE_INVALID · CERT_EXPIRED_AT_DATE<br/>CERT_NOT_YET_VALID_AT_DATE · CERT_REVOKED<br/>CERT_PURPOSE_MISMATCH · CERT_NAME_CONSTRAINT_VIOLATION<br/>REVOCATION_UNKNOWN (CRL errors)"]
     OK -.-> P["CERT_WEAK_KEY · CERT_WEAK_SIGNATURE_ALGORITHM<br/>REVOCATION_UNKNOWN · CERT_IN_TRUST_LIST<br/>CERT_ISSUED_BY_RAKVOR_INTERNAL"]
 ```
