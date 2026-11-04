@@ -1,801 +1,693 @@
-<!--
-  Template note for the docs agent of a tool scaffolded from rv-certcheck:
-  sections between forge:domain markers describe what THIS tool does (inventory, file types, duplicates,
-  intake role) and must be rewritten for the new tool. Everything outside the markers (hashing, audit chain,
-  case folder, RFC 3161, signed PDFs, custody forms, determinism) is shared code: keep it, and re-check the
-  numbers against the code. The scaffold replaces the tool name everywhere, so re-read any sentence that
-  names the intake tool.
--->
-
 # Theory of operation
 
 This page explains **why** each step of RV CertCheck works, at two levels:
 
 - **[Part A — For clients, lawyers and judges](#part-a--for-clients-lawyers-and-judges)**: plain language,
-  analogies and pictures. No knowledge of computing or cryptography is needed.
-- **[Part B — For examiners and opposing experts](#part-b--for-examiners-and-opposing-experts)**: algorithms,
-  data structures, exact constants, the source file that implements each one, and the standards behind them.
-  Every number in Part B is taken from the code of this commit or computed for this page with the tool itself;
-  where the code and a standard or another page differ, Part B says so.
+  everyday analogies, and what a result can and cannot mean. No knowledge of cryptography is needed.
+- **[Part B — For examiners and opposing experts](#part-b--for-examiners-and-opposing-experts)**: the standards,
+  the exact rules and thresholds, and the source file that implements each one. Every rule in Part B is read from
+  the code of this commit; where the code departs from a standard or from OpenSSL's own behaviour, Part B says so.
 
-It describes what the tool **does**, not what it should do. Known weaknesses are stated where they apply and
-collected in [admissibility.md](admissibility.md#consolidated-gap-list). How to run the tool:
-[usage.md](usage.md). How to install and verify it: [installation.md](installation.md).
+It describes what the tool **does**, not what it should do. Known limits are stated where they apply and collected
+in [admissibility.md](admissibility.md#consolidated-gap-list). How to run the tool: [usage.md](usage.md). The
+meaning of every finding code: [reports.md](reports.md#findings-catalogue).
 
 ## Contents
 
 - Part A: [A1 What the tool is](#a1-what-the-tool-is-and-is-not) ·
-  [A2 Digital fingerprints](#a2-digital-fingerprints-hashes) ·
-  [A3 Two fingerprints, one reading](#a3-two-fingerprints-one-reading) ·
-  [A4 What a file really is](#a4-what-a-file-really-is-its-first-bytes) ·
-  [A5 Identical copies](#a5-identical-copies) ·
-  [A6 The case folder](#a6-the-case-folder-one-register-for-the-whole-case) ·
-  [A7 The tool's own diary](#a7-the-tools-own-diary-the-audit-log) ·
-  [A8 Proving when](#a8-proving-when-trusted-timestamps) ·
-  [A9 Signed reports](#a9-signed-reports) ·
-  [A10 Custody forms](#a10-custody-forms) ·
-  [A11 Reading a clean result](#a11-what-no-findings-means)
-- Part B: [B1 Source map](#b1-source-map-and-constants) ·
+  [A2 Keys and signatures](#a2-keys-and-signatures-a-seal-only-one-person-holds) ·
+  [A3 Certificates](#a3-certificates-an-id-card-for-a-key) ·
+  [A4 Chains and anchors](#a4-chains-and-anchors-who-vouches-for-whom) ·
+  [A5 Valid at a date](#a5-valid-at-a-date) ·
+  [A6 Revocation](#a6-revocation-the-list-of-cancelled-cards) ·
+  [A7 Timestamps](#a7-trusted-timestamps-a-notary-for-a-fingerprint) ·
+  [A8 Purpose](#a8-purpose-a-driving-licence-is-not-a-passport) ·
+  [A9 Trust lists](#a9-trust-lists-the-official-register-of-issuers) ·
+  [A10 Rakvor's own certificates](#a10-rakvors-own-certificates) ·
+  [A11 The tool's own diary](#a11-the-tools-own-diary) ·
+  [A12 Reading a result](#a12-reading-a-result)
+- Part B: [B1 Source map](#b1-source-map) ·
   [B2 Pipeline](#b2-pipeline-and-reads-of-the-evidence) ·
-  [B3 Hashing](#b3-single-pass-dual-hashing) ·
-  [B4 Type detection](#b4-type-detection-by-magic-bytes-and-extension-mismatch) ·
-  [B5 Duplicates](#b5-duplicate-detection-by-digest) ·
-  [B6 Audit chain](#b6-the-audit-hash-chain) ·
-  [B7 Case folder](#b7-the-case-folder) ·
-  [B8 RFC 3161](#b8-rfc-3161-trusted-timestamp) ·
-  [B9 Signed reports](#b9-signed-pdf-reports) ·
-  [B10 Custody forms](#b10-custody-forms) ·
-  [B11 Determinism](#b11-determinism-and-repeatability) ·
-  [B12 What findings do not prove](#b12-what-each-finding-does-not-prove) ·
-  [B13 References](#b13-references)
+  [B3 Recognising inputs](#b3-recognising-inputs-by-content) ·
+  [B4 Path validation](#b4-rfc-5280-path-validation-as-openssl-implements-it) ·
+  [B5 Collecting every error](#b5-collecting-every-error-the-re-run-approach) ·
+  [B6 The validation instant](#b6-the-validation-instant---at) ·
+  [B7 Revocation](#b7-revocation-crl-and-ocsp-rules) ·
+  [B8 RFC 3161 tokens](#b8-rfc-3161-tokens-and-ess-signing-certificate) ·
+  [B9 Weak cryptography](#b9-weak-key-and-signature-thresholds) ·
+  [B10 Purposes](#b10-purpose-rules) ·
+  [B11 Name constraints](#b11-name-constraints) ·
+  [B12 Key matching](#b12-private-key-matching) ·
+  [B13 Rakvor internal certificates](#b13-rakvor-internal-certificates) ·
+  [B14 Trust lists](#b14-trust-list-formats-and-snapshots) ·
+  [B15 PKI creation](#b15-pki-creation) ·
+  [B16 Lab sets](#b16-lab-sets-and-determinism) ·
+  [B17 Audit chain and case folder](#b17-audit-chain-case-folder-timestamp-of-the-log) ·
+  [B18 Validation status](#b18-oracles-and-validation-status) ·
+  [B19 References](#b19-references)
 
 ---
 
 # Part A — For clients, lawyers and judges
 
-<!-- forge:domain -->
 ## A1 What the tool is (and is not)
 
-RV CertCheck is the **intake desk** of a digital investigation. Before anyone examines a file, the tool writes down
-what was received: every file's exact digital fingerprint, its size, what kind of file it really is, and whether
-anything looks wrong (a photo that is really a PDF, a program hidden under another name, an empty file, two
-identical copies). In a case folder it gives each file an evidence number (`E0001`, `E0002`, …) so that every
-later tool can prove it looked at exactly the same bytes.
+RV CertCheck reads the cryptographic material found in a case: certificates, revocation lists, timestamp tokens,
+key files. It answers precise, narrow questions such as *"did this certificate chain lead to the root the examiner
+chose, at this date, for this use?"* or *"is this private key the one that belongs to that certificate?"*. Each
+answer comes with two sentences: what the result **shows** and what it **does not prove**.
 
-It never says "this file is genuine" or "this file is fake". Each observation is written as a **finding** that
-says, in plain words, **what it shows** and **what it does not prove**. The conclusion belongs to a human
-examiner.
+It does not say that a document was signed by a person, that a signature is genuine, or that a certificate is
+false. Those are conclusions an examiner or a court draws from many facts; the tool supplies some of them.
 
-```mermaid
-flowchart LR
-    S[("Source<br/>(phone, laptop, export)")] -->|forensic copy| C[("Verified copy")]
-    C -->|read only| T["RV CertCheck<br/>intake"]
-    T --> F["Findings<br/>what it shows / what it does not prove"]
-    T --> R[["Evidence register<br/>E0001, E0002, …"]]
-    T --> L[("Audit log<br/>every step, sealed")]
-    R --> A["Later tools<br/>re-check each file"]
-    F --> E["Examiner's opinion"]
-    L --> E
-```
+It also **creates** certificates for Rakvor's own use (signing its software releases and its examiners' reports)
+and test certificates for training. Those certificates are internal: they carry no legal presumption in Colombia
+or in the EU ([A10](#a10-rakvors-own-certificates)).
 
-| The tool can tell you | The tool cannot tell you |
-| --- | --- |
-| The exact fingerprint of every file it received, and that later copies are identical | That the copy it received equals the original source |
-| That a file's content does not match its name (e.g. a PDF called `.jpg`) | Why it was renamed, or by whom |
-| That two files have identical content | Who copied them, or when |
-| Every action it performed, in a log that shows any later edit | Whether the workstation's clock was right |
-<!-- /forge:domain -->
+## A2 Keys and signatures: a seal only one person holds
 
-## A2 Digital fingerprints (hashes)
+A digital signature works like a wax seal whose stamp only one person owns. The stamp is the **private key**; it
+must stay secret. Anyone can check a seal with the matching **public key**, which can be handed out freely. If the
+sealed document changes by a single character, the seal no longer matches.
 
-A **hash** is a short code computed from every byte of a file — a fingerprint. Change one character and the
-fingerprint changes completely; keep the file identical and the fingerprint is the same on any computer, with any
-correct program.
+A signature therefore tells you two things at most: the document has not changed since it was sealed, and it was
+sealed with a particular private key. It does not tell you **who** was holding the stamp.
 
-Real example (SHA-256), using the sample file `examples/sample/evidence/acta.txt` (61 bytes):
+## A3 Certificates: an ID card for a key
 
-| Text (last line of the file) | SHA-256 fingerprint |
-| --- | --- |
-| `Firmado: Ana Ruiz` | `80e089ad6704c831e386b430adf92c5f5b72ec4428566d3580660e103c183c3c` |
-| `Firmado: Ana Ruis` | `590570db76a9735f7b3782c73679fc6af6ac4041be4c41bcba1df0b648115523` |
+A public key on its own is just a number. A **certificate** is an ID card that binds that number to a name
+(a person, a company, a web site) for a period of time, and is itself sealed by an issuer, a **certification
+authority (CA)**. Like an ID card it has a holder, an issuer, a serial number, a "valid from" and "valid until"
+date, and remarks about what it may be used for.
 
-One letter differs; the two fingerprints share nothing recognisable. This is why a hash proves that a file was
-**not** changed: if today's fingerprint equals the one written down at intake, the file is the same, bit for bit.
+## A4 Chains and anchors: who vouches for whom
 
-## A3 Two fingerprints, one reading
+The CA that sealed a certificate has its own certificate, sealed by a higher CA, and so on up to a **root**, which
+seals itself. This is a **chain**: *leaf → intermediate → root*. Checking a chain means checking every seal on the
+way up and every date and remark.
 
-The examiner may choose **one or two** fingerprint methods (for example SHA-256, the modern standard, plus MD5,
-which older case files often use). The tool reads each file **once** and feeds every piece it reads to both
-methods at the same time, like a cashier who scans each item once while two tills add it up. Both fingerprints
-therefore describe exactly the same bytes. More than two methods at once are refused, so that the work stays
-fast on very large folders.
-
-<!-- forge:domain -->
-## A4 What a file really is: its first bytes
-
-The name of a file (`holiday.jpg`) is a label anyone can change. The **first bytes** of the content are harder to
-fake by accident: most formats start with a fixed "signature" — PDF documents start with `%PDF-`, JPEG photos with
-the bytes `FF D8 FF`, Windows programs with `MZ`. The tool compares the label with the signature.
-
-The sample `foto-vacaciones.jpg` ("holiday photo") starts with `%PDF-1.4`: it is a PDF renamed as a photo, so the
-tool reports *Extension does not match content*. A program hidden under a document name is reported with higher
-severity, because opening it could run it.
-
-Limits a court should know: the tool knows 15 common signatures (unknown types are reported as unknown, not as
-suspicious); a file without an extension is not compared; and some signatures are very short (2 bytes), so an
-ordinary text that happens to start with `MZ` would be reported as a program.
-
-## A5 Identical copies
-
-When two files have the same fingerprint, their contents are identical, whatever their names. The tool groups
-them and reports *Duplicate content*. In the sample, `acta.txt` and `acta-copia.txt` are one such pair. A
-duplicate is information, not a problem: copies are normal. It does not say which copy came first.
-<!-- /forge:domain -->
-
-## A6 The case folder: one register for the whole case
-
-In a real case several Rakvor tools work one after the other. They share **one case folder**, which holds a
-register of the evidence. The intake tool writes each file into it once, with its fingerprints and an evidence
-number. Every later tool, before examining a file, takes its fingerprint again and compares it with the register:
-same fingerprint, same evidence; different fingerprint, a high-severity warning.
+Nothing in the chain itself says the root deserves trust: anybody can make a root. Trust starts from a decision:
+the examiner names the roots to rely on (the **trust anchors**, option `--anchor`). The same certificate can lead
+to a trusted root for one examiner and to an unknown one for another; the report always names the anchors used.
 
 ```mermaid
-flowchart LR
-    I["Intake tool"] -->|"writes once"| R[["Register<br/>E0001 · E0002 · E0003"]]
-    R -->|"compare fingerprints"| A1["Analysis tool 1"]
-    R -->|"compare fingerprints"| A2["Analysis tool 2"]
-    I --> J[("Case diary<br/>who worked on the case, when")]
-    A1 --> J
-    A2 --> J
+flowchart BT
+    L["Leaf certificate<br/>CN=signer · key K1"] -- "sealed by" --> I["Intermediate CA<br/>key K2"]
+    I -- "sealed by" --> R["Root CA<br/>seals itself"]
+    E(["Examiner's choice<br/>--anchor root.pem"]) -. "trusts" .-> R
 ```
 
-The case folder also keeps a **case diary** in which every tool notes when it started and finished and the final
-seal of its own diary (A7). The two diaries quote each other, so one cannot be edited without breaking the other.
+## A5 Valid at a date
 
-## A7 The tool's own diary (the audit log)
+An ID card can be checked "today" or "on the day of the contract". The answer may differ. RV CertCheck checks a
+chain **at one instant**, which the examiner chooses (`--at`), and prints that instant in every report.
 
-Everything the tool does is written to a diary, `audit.jsonl`. Each line carries the seal (hash) of the line
-before it, like numbered pages where every page quotes the seal of the previous page. Editing, inserting,
-deleting or reordering a page breaks the seals from that point on, and `rv-certcheck verify-log` (or an independent
-Python script) detects it.
+This matters because **an expired certificate can be perfectly normal for an old signature**. A contract signed
+in 2023 with a certificate valid until 2024 was signed with a valid card; checking it "today" says *expired*,
+which is true and irrelevant. What matters for a signature is whether the card was valid **when the signature was
+made**. To know when it was made, you need a reliable time: a trusted timestamp ([A7](#a7-trusted-timestamps-a-notary-for-a-fingerprint)),
+not the date the signer typed. In this version the examiner gives that date with `--at`; `--at signing-time`
+cannot yet read it from the signed object and falls back to *now*, saying so in the verdict.
 
-```mermaid
-flowchart LR
-    G["start<br/>000…000"] --> E1["#1 run started<br/>seal 6db9fbe2…"]
-    E1 --> E2["#2 3 files found<br/>quotes 6db9fbe2…<br/>seal 4c78f96c…"]
-    E2 --> E3["#3 acta.txt hashed<br/>quotes 4c78f96c…"]
-    X["someone edits #2:<br/>3 files becomes 2"] -.->|"seal becomes f6a7e0fc…<br/>#2 no longer matches"| E2
-```
+## A6 Revocation: the list of cancelled cards
 
-One honest limit: if the **last** pages are torn out, the remaining pages still agree with each other. That is
-why the diary's final seal is also written in the case diary, printed in the reports and sent to a notary (A8).
+A card can be cancelled before its end date: the key was lost or stolen, the employee left. The CA then publishes
+the cancellation in a **certificate revocation list (CRL)**, a dated list of cancelled serial numbers, or answers
+questions one by one through **OCSP** (an "is this card still good?" service).
 
-## A8 Proving when: trusted timestamps
+Offline, the tool knows only the lists it is given. If it was given none that covers the certificate, it says
+*"revocation status unknown"*, which means exactly that: not revoked, not good, unknown. A revocation also has a
+date: a card cancelled in June does not invalidate a signature made in March.
 
-The diary proves its own consistency, not *when* it was written. For that, the tool sends the latest seal to a
-**time-stamping authority** — an independent online notary — which signs "I saw this seal at 15:30:01 UTC on
-21 October 2026". The notary never sees the evidence, only a 32-byte seal.
+## A7 Trusted timestamps: a notary for a fingerprint
 
-```mermaid
-sequenceDiagram
-    participant T as RV CertCheck
-    participant N as Time-stamping authority (notary)
-    T->>N: latest seal of the diary (32 bytes)
-    N-->>T: signed receipt "seen at 2026-10-21 15:30:01 UTC"
-    Note over T: receipt stored next to the diary (timestamp-NNNNN.tsr)
-```
+A **timestamp authority (TSA)** receives the fingerprint (hash) of some data, never the data itself, and returns a
+signed token saying "this fingerprint existed at 10:42 UTC on this day". The tool checks the TSA's seal, that the
+token names the TSA's certificate, and that the TSA's own chain was valid **at the time stated**. A valid token
+shows that data with that fingerprint existed by then. It says nothing about who made the data or whether it is
+true.
 
-Without internet the run still finishes; the receipt can be requested later with `rv-certcheck timestamp`. A
-timestamp proves the diary existed at that time — not that its content is true.
+## A8 Purpose: a driving licence is not a passport
 
-## A9 Signed reports
+Certificates carry remarks about their use: web server, code signing, e-mail, timestamping, document signing.
+A web-server certificate used to sign a contract is like a driving licence shown at a border. The examiner chooses
+the use to check (`--purpose`); a mismatch is reported as such. Software often accepts such mismatches, so a
+mismatch is a fact to explain, not evidence of misuse.
 
-With the examiner's certificate, every PDF report is digitally signed, so any later change to a report is
-detectable with Adobe Reader or another validator. The HTML and JSON reports are not signed, but their
-fingerprints are written in the diary, which is timestamped.
+## A9 Trust lists: the official register of issuers
 
-## A10 Custody forms
+In the EU, each Member State publishes a **trusted list** of the providers it supervises and of their services
+(for example "issues qualified certificates"), with each service's status over time. The tool can import such a
+list and say whether a certificate of the chain belongs to a listed service, and what that service's status was
+at the date checked. Colombia publishes no machine-readable list of its accredited certification entities, so
+Rakvor keeps a hand-curated file with its sources. In both cases the tool works on a **dated copy** (a snapshot)
+and records its fingerprint; in this version it does not check the EU list's own signature.
 
-For every file the tool pre-fills a **chain-of-custody form** — Colombian style (Spanish) or French style (French),
-always with an English copy — with the case number, the evidence number, the fingerprints and the times of the
-work, and leaves empty rows for the people who hand over and receive the evidence to sign. It is an internal
-record that accompanies, but does not replace, the official form of the police, prosecutor or court.
+Being on a list is one condition among several for a certificate to have a special legal status; it is not that
+status.
 
-<!-- forge:domain -->
-## A11 What "no findings" means
+## A10 Rakvor's own certificates
 
-A file without findings is **not** proven authentic. It only means that the checks this tool applies found
-nothing. Every report prints these limitations:
+Rakvor uses this tool to make certificates for itself: one to sign its software releases, one per examiner to
+sign reports, internal web servers, test material. Rakvor is not an authorised *entidad de certificación* in
+Colombia and not a qualified trust service provider in the EU, so these certificates are **not a *firma digital*
+under Ley 527 de 1999 art. 28 and not qualified certificates under eIDAS**. Every one of them carries that
+statement inside it, and `analyze` reports it whenever it meets one. A Rakvor signature shows that a Rakvor key
+was used; its weight rests on Rakvor's procedures and records.
 
-- Type detection uses a limited table of common file signatures; unknown types are reported as unknown, not as
-  suspicious.
-- Modification times come from the file system of the examined copy and may differ from the original source.
-- A result without findings does not prove that a file is authentic or unaltered before acquisition.
-- A trusted timestamp proves the audit log existed in this exact form at the stated time; it does not prove that
-  the examined copy matches the original source.
-<!-- /forge:domain -->
+## A11 The tool's own diary
+
+Every action of every run (each file read, each fingerprint, each result, each certificate created) is written
+to a diary in which every line carries the fingerprint of the line before. Changing, removing or reordering a line
+breaks the sequence, and `verify-log` finds it. The CA folder has its own diary of every certificate issued or
+revoked (`issued.jsonl`), built the same way, and the tool refuses to issue anything if that diary does not check
+out.
+
+## A12 Reading a result
+
+| You read | It means | It does not mean |
+| --- | --- | --- |
+| Chain valid at the date checked | Every seal, date, use and constraint checked out, up to the anchor the examiner chose | That a person signed something, or that the anchor deserves trust |
+| Chain does not reach a trusted anchor | No path to the chosen roots could be completed | That the certificate is false: the right root or an intermediate may simply be missing |
+| Expired at the date checked | The card's end date is before the instant checked | That an older signature made with it is invalid |
+| Revoked | A list or answer covering the certificate cancels it, from a stated date | That the holder did anything wrong, or that earlier signatures are invalid |
+| Revocation unknown | No list covering it was available | Revoked, or not revoked |
+| Timestamp token valid | The TSA sealed this fingerprint at this time, with a chain valid then | Who made the data, or that it is true |
+| Rakvor internal certificate | Issued by Rakvor's internal PKI | Any legal presumption |
+| No finding | None of the checks of [reports.md](reports.md) fired | That the material is genuine or unaltered before it was received |
 
 ---
 
 # Part B — For examiners and opposing experts
 
-## B1 Source map and constants
+## B1 Source map
 
-| Process | Implementation | Key constants (value in this commit) |
-| --- | --- | --- |
-| Input collection | [src/core/src/input.rs](../src/core/src/input.rs) | folders 1 level unless `--recursive`; symbolic links never followed; paths made absolute and lexically normalised, de-duplicated, sorted by that string bytewise (UTF-8; same rule as the Python profile), numbered from 1; a UTF-8 BOM at the start of an `--input-list` file is ignored |
-| Log verification | [src/core/src/verify.rs](../src/core/src/verify.rs) | chain + timestamps + truncation anchors (timestamp `covers_seq`, case log `run_finished`) |
-| Hashing | [src/core/src/hash.rs](../src/core/src/hash.rs) | `CHUNK` = 1 MiB (1 048 576 bytes); `MAX_SELECTED` = 2; head kept for detection = first 4 096 bytes; known answers for `"abc"` |
-| Pipeline | [src/core/src/run.rs](../src/core/src/run.rs) | progress events every 150 ms; run id = `YYYYMMDDTHHMMSSZ-` + 6 hex of SHA-256(clock, pid, host) |
-| Audit chain | [src/core/src/audit.rs](../src/core/src/audit.rs), [tests/verify_chain.py](../tests/verify_chain.py) | genesis = 64 zeros; SHA-256 over canonical JSON |
-| Case folder | [src/core/src/case.rs](../src/core/src/case.rs) | schemas `rakvor.case/1`, `rakvor.registry/1`; lock wait 30 s; stale lock 600 s; ids `E%04d` |
-| Timestamp, report signing | [src/core/src/trust.rs](../src/core/src/trust.rs) | default TSA `http://timestamp.digicert.com`; HTTP timeout 15 s; response ≤ 1 MiB; nonce 8 bytes |
-| PDF writer | [src/core/src/report/pdf.rs](../src/core/src/report/pdf.rs) | A4 595 × 842 pt; signature placeholder 16 384 bytes |
-| Reports | [src/core/src/report/mod.rs](../src/core/src/report/mod.rs) | duplicate partners listed ≤ 10, duplicate paths ≤ 20 per group; 6 blank custody transfer rows; item folder name ≤ 60 characters |
-| Environment record | [src/core/src/env.rs](../src/core/src/env.rs), [src/core/build.rs](../src/core/build.rs) | compiler, target and every `Cargo.lock` package embedded at build time; product version from `version.txt` |
+| Concern | File |
+| --- | --- |
+| Frozen model, finding codes and default severities, Rakvor OIDs | [src/certs/src/model.rs](../src/certs/src/model.rs) |
+| Public API of the certificate layer, bundled Rakvor root, data folder | [src/certs/src/lib.rs](../src/certs/src/lib.rs) |
+| Content sniffing | [src/certs/src/analysis/sniff.rs](../src/certs/src/analysis/sniff.rs) |
+| Field extraction, weak-crypto policy, Rakvor policy detection, PKCS#12 | [src/certs/src/analysis/parse.rs](../src/certs/src/analysis/parse.rs) |
+| Path building and verification, error collection, purposes, name constraints | [src/certs/src/analysis/chain.rs](../src/certs/src/analysis/chain.rs) |
+| CRL and OCSP evaluation | [src/certs/src/analysis/revocation.rs](../src/certs/src/analysis/revocation.rs) |
+| `--online` fetching | [src/certs/src/analysis/online.rs](../src/certs/src/analysis/online.rs) |
+| RFC 3161 | [src/certs/src/analysis/timestamp.rs](../src/certs/src/analysis/timestamp.rs) |
+| `--anchor` resolution | [src/certs/src/analysis/anchors.rs](../src/certs/src/analysis/anchors.rs) |
+| Key matching | [src/certs/src/analysis/keymatch.rs](../src/certs/src/analysis/keymatch.rs) |
+| Trust lists (EU XML, Colombian CSV, snapshot store) | [src/certs/src/trustlist/](../src/certs/src/trustlist/mod.rs) |
+| CA folders, profiles, issue/revoke/CRL/OCSP | [src/certs/src/create/pki.rs](../src/certs/src/create/pki.rs), [build.rs](../src/certs/src/create/build.rs), [derw.rs](../src/certs/src/create/derw.rs) |
+| Key protection (PBES2, PKCS#12), seeded lab keys | [src/certs/src/create/keys.rs](../src/certs/src/create/keys.rs), [rng.rs](../src/certs/src/create/rng.rs) |
+| `issued.jsonl` | [src/certs/src/create/issued.rs](../src/certs/src/create/issued.rs) |
+| Lab sets | [src/certs/src/create/lab.rs](../src/certs/src/create/lab.rs) |
+| PKCS#11 | [src/certs/src/create/tokens.rs](../src/certs/src/create/tokens.rs) |
+| Glue: per-item and cross-item stages, findings, chain.json | [src/core/src/certscan.rs](../src/core/src/certscan.rs) |
+| Finding wording (shows / does not prove) | [i18n/en.json](../i18n/en.json), es, fr |
 
-<!-- forge:domain -->
-| Domain process | Implementation | Key constants |
-| --- | --- | --- |
-| Type detection, extension mismatch, executables, empty files | [src/core/src/analyzer.rs](../src/core/src/analyzer.rs) | 15 signatures; text extensions `txt csv log xml json html` |
-| Duplicates, intake registration | [src/core/src/report/mod.rs](../src/core/src/report/mod.rs) `duplicate_groups`; [src/core/src/run.rs](../src/core/src/run.rs) `register_items` | primary (first) algorithm; size > 0 |
-| Role in the case folder | [src/core/src/lib.rs](../src/core/src/lib.rs) `CASE_ROLE` | `Intake` |
-<!-- /forge:domain -->
+OpenSSL is the vendored OpenSSL 3 built from source by `openssl-src` (the version linked is recorded in every
+`chain.json`, in every verdict and in `environment.json`; this commit links `OpenSSL 3.6.3 9 Jun 2026`). The
+certificate layer forbids `unsafe` code (`#![forbid(unsafe_code)]`); OpenSSL is reached through the safe API of
+the `openssl` crate.
 
-The core never prints; the CLI ([src/cli/src/main.rs](../src/cli/src/main.rs)) and the GUI
-([src/gui/src/state.rs](../src/gui/src/state.rs)) render the same event stream, so both front-ends produce the
-same audit actions, findings and reports.
-
-<!-- forge:domain -->
 ## B2 Pipeline and reads of the evidence
 
 ```mermaid
-sequenceDiagram
-    autonumber
-    participant R as run.rs
-    participant A as audit.jsonl
-    participant C as case folder
-    participant E as Evidence (read-only)
-    participant O as reports folder
-    R->>C: verify case log + registry, append run_started (under lock)
-    R->>A: run_started, case_linked, ui_* (GUI), environment_recorded, inputs_resolved
-    loop every item
-        R->>A: item_started (size, mtime)
-        R->>E: File::open, 1 MiB chunks, 1–2 digests + first 4 KiB
-        R->>A: item_hashed (digests, bytes_read, mtime_unchanged)
-        R->>A: item_analyzed (type, extension, findings, status)
-    end
-    R->>C: register items, write registry, append evidence_registered (under lock)
-    R->>A: evidence_registered ×N, duplicate_group, hash_register_written
-    R->>O: per-item reports, then item_reports_written ×N
-    R->>A: timestamp_obtained / timestamp_pending, statistics_report_written, run_finished
-    R->>C: run_finished with the final audit head (under lock)
-```
-
-The evidence is read **once**, sequentially, with `File::open` (read-only access). The type check uses the first
-4 096 bytes kept during that same read, so there is no second read and no window in which the bytes hashed and
-the bytes examined could differ. The modification time is read before and after hashing and compared
-(`mtime_unchanged` in `item_hashed`); a change means the file was being written during the read.
-
-Ordering facts an opposing expert may test:
-
-- Registration happens **after** all items are hashed and **before** duplicates are computed, so a cancelled run
-  still registers the items it finished.
-- The timestamp is requested after the last `item_reports_written` and **before** the statistics report, so the
-  token covers every evidence digest, finding and item-report digest, but not the statistics report or
-  `run_finished` (both are written after it; see [B8](#b8-rfc-3161-trusted-timestamp)).
-- A wrong certificate password stops the run (`run_failed`) before any evidence byte is read.
-<!-- /forge:domain -->
-
-## B3 Single-pass dual hashing
-
-| Algorithm | Standard | Output | Status for evidence |
-| --- | --- | --- | --- |
-| `md5` | RFC 1321 | 128 bit | Practical collisions since 2004–2005 (Wang & Yu); legacy matching only |
-| `sha1` | FIPS 180-4 | 160 bit | Practical collision 2017 (Stevens et al., "SHAttered"); legacy matching only |
-| `sha256` | FIPS 180-4 | 256 bit | Default; recommended primary |
-| `sha512` | FIPS 180-4 | 512 bit | Recommended |
-| `sha3-256` | FIPS 202 | 256 bit | Sound; less familiar to courts |
-| `blake3` | BLAKE3 specification (2020) | 256 bit | Sound; not a NIST-approved hash |
-
-Implementations: RustCrypto `md-5`, `sha1`, `sha2`, `sha3` and the official `blake3` crate (exact versions in each
-run's `environment.json` → `dependencies`).
-
-```text
-hash_reader(r, algos)                                        src/core/src/hash.rs
-  validate_selection: 1 ≤ len ≤ 2, the two different        → else usage error (exit 2)
-  loop:
-    n = r.read(buf[0 .. 1 048 576])                          Interrupted → retry; other error → UNREADABLE
-    if n = 0: break
-    head += buf[0 .. min(n, 4096 − len(head))]               first 4 KiB, for type detection
-    for each hasher h: h.update(buf[0 .. n])                 the same slice feeds both digests
-    total += n
-    if on_chunk(total) = false: return cancelled             cancel granularity = one chunk
-  return (digests in selection order, total, head)
-```
-
-- **Same bytes for both digests.** Each chunk is passed to every hasher before the next read, so the two digests
-  can only describe the same byte stream. The unit test `one_pass_feeds_two_digests_identically_to_separate_passes`
-  checks a 3 MiB + 17-byte stream against separate one-shot digests.
-- **Primary algorithm.** The first selected algorithm is the primary: it groups duplicates, is shown as the
-  customer's "digital fingerprint" and is compared first with the case registry.
-- **`self-test`** checks every algorithm against the published digest of `"abc"` (e.g. SHA-256
-  `ba7816bf…f20015ad`, FIPS 180-4 example). It proves the build computes correct digests; it does not test type
-  detection or reports.
-- **Avalanche, measured** for [A2](#a2-digital-fingerprints-hashes): the two inputs differ in one character
-  (`'z'` = 0x7A, `'s'` = 0x73, 2 bits); their SHA-256 digests differ in **136 of 256 bits** (≈ 128 expected for an
-  ideal function), and only 4 of the 64 hexadecimal positions coincide.
-- **No hash policy.** The tool accepts `md5,sha1` without any SHA-2/SHA-3/BLAKE3 algorithm. Choosing at least
-  one collision-resistant algorithm is the examiner's job ([admissibility.md](admissibility.md#consolidated-gap-list), G11).
-- **Size.** `item_started` records the size from the file system; `item_hashed` records `bytes_read`. The reports
-  use `bytes_read`. A difference between the two means the file changed size while it was being read.
-
-<!-- forge:domain -->
-## B4 Type detection by magic bytes and extension mismatch
-
-### Signature table ([analyzer.rs](../src/core/src/analyzer.rs) `SIGNATURES`, first match wins)
-
-| # | Detected type | Offset | Magic bytes | Expected extensions | Executable |
-| --: | --- | --: | --- | --- | :-: |
-| 1 | PDF document | 0 | `25 50 44 46 2D` (`%PDF-`) | pdf | |
-| 2 | PNG image | 0 | `89 50 4E 47 0D 0A 1A 0A` | png | |
-| 3 | JPEG image | 0 | `FF D8 FF` | jpg jpeg jpe jfif | |
-| 4 | GIF image | 0 | `47 49 46 38` (`GIF8`) | gif | |
-| 5 | ZIP / Office Open XML | 0 | `50 4B 03 04` (`PK..`) | zip docx xlsx pptx odt ods jar apk epub | |
-| 6 | OLE2 (legacy Office, MSG) | 0 | `D0 CF 11 E0 A1 B1 1A E1` | doc xls ppt msg | |
-| 7 | Windows executable (PE) | 0 | `4D 5A` (`MZ`) | exe dll sys scr com efi | yes |
-| 8 | Linux executable (ELF) | 0 | `7F 45 4C 46` | so bin elf o | yes |
-| 9 | SQLite database | 0 | `SQLite format 3` + `00` | db sqlite sqlite3 | |
-| 10 | 7-Zip archive | 0 | `37 7A BC AF 27 1C` | 7z | |
-| 11 | RAR archive | 0 | `52 61 72 21 1A 07` | rar | |
-| 12 | GZIP archive | 0 | `1F 8B` | gz tgz | |
-| 13 | Windows event log (EVTX) | 0 | `ElfFile` + `00` | evtx | |
-| 14 | Windows registry hive | 0 | `72 65 67 66` (`regf`) | dat hve | |
-| 15 | MP4 / QuickTime video | 4 | `66 74 79 70` (`ftyp`) | mp4 m4v mov m4a 3gp heic | |
-
-### Annotated example: `examples/sample/evidence/foto-vacaciones.jpg` (112 bytes)
-
-```text
-offset  bytes                                            text
-     0  25 50 44 46 2D 31 2E 34 0A 25 20 73 61 6D 70 6C  %PDF-1.4.% sampl   ◄ bytes 0–4 = signature #1 "PDF document"
-    16  65 3A 20 61 20 50 44 46 20 72 65 6E 61 6D 65 64  e: a PDF renamed
-    32  20 61 73 20 61 20 70 68 6F 74 6F 0A 31 20 30 20   as a photo.1 0
-   ...
-    96  20 31 20 30 20 52 20 3E 3E 0A 25 25 45 4F 46 0A   1 0 R >>.%%EOF.
-name "foto-vacaciones.jpg" → extension "jpg" (lower-cased text after the last dot)
-"jpg" ∉ {pdf}  and  "jpg" is a known extension (signature #3)  → EXTENSION_MISMATCH (medium)
-                                                                 detected = "PDF document", extension = "jpg"
-```
-
-### Decision ([analyzer.rs](../src/core/src/analyzer.rs) `analyze`)
-
-```mermaid
 flowchart TB
-    S["name, size, first 4 KiB"] --> Z{"size = 0?"}
-    Z -->|yes| E0["EMPTY_FILE (info)"]
-    S --> D{"a signature matches<br/>at its offset?"}
-    D -->|no| U["detected_type = unknown<br/>no type finding"]
-    D -->|yes| X{"file name has<br/>an extension?"}
-    X -->|no| N["no finding"]
-    X -->|yes| L{"extension in the<br/>signature's list?"}
-    L -->|yes| N
-    L -->|no| P{"executable<br/>signature?"}
-    P -->|yes| H["EXECUTABLE_CONTENT (high)"]
-    P -->|no| K{"extension known to any signature<br/>or txt csv log xml json html?"}
-    K -->|yes| M["EXTENSION_MISMATCH (medium)"]
-    K -->|no| N
+    subgraph item["Per item (hashing loop, run.rs)"]
+        R1["Read 1: streamed hash<br/>1–2 algorithms"] --> R2["Read 2 (≤ 16 MiB): whole item<br/>re-hashed = read 1?"]
+        R2 -->|differs| CH["EVIDENCE_CHANGED_DURING_READ (high)"]
+        R2 --> SN["sniff(): kind by content"]
+        SN -->|unknown| NR["CRYPTO_INPUT_NOT_RECOGNISED (info)"]
+        SN -->|known| PA["parse_any(): CertInfo, CRL, OCSP, TST,<br/>key facts, CSR + parse-time signals"]
+    end
+    subgraph cross["After the loop (cross-item stage)"]
+        PO["Pool: every certificate of the run<br/>(incl. those inside OCSP and TST)"]
+        RV["CRLs / OCSP: --crl/--ocsp files<br/>+ every CRL / OCSP item"]
+        PO --> VC["validate_chain() per end-entity<br/>certificate of each item"]
+        RV --> VC
+        PO --> TS["verify_timestamp_token()"]
+        PO --> KM["key ↔ certificate by SPKI SHA-256"]
+    end
+    PA --> PO
+    VC --> OUT["findings · chain.json · certificate.txt<br/>(hashed, audited)"]
+    TS --> OUT
+    KM --> OUT
 ```
 
-Consequences that matter in court (all from the code, all tested or testable with the samples):
+- Items larger than 16 MiB (`MAX_CRYPTO_BYTES`) are hashed but not parsed (`CRYPTO_INPUT_NOT_RECOGNISED`, kind
+  "larger than 16 MiB, not read").
+- **Targets.** In each item, the certificates that issue no other certificate of the same item are the end
+  entities (`targets()` in certscan.rs). A single certificate is its own target. Each target gets one verdict.
+- **Untrusted pool.** Every certificate of every item of the run may complete a path (`ChainRequest::untrusted_der`).
+  Being in the pool never makes a certificate trusted: only `--anchor` does.
+- **Revocation sources.** Every CRL and OCSP response of the run, labelled `item:<index>`, plus the `--crl` /
+  `--ocsp` files, labelled `file:<path>` and hashed in the audit entry `validation_options`.
+- A failing certificate-layer call becomes `ANALYSIS_STEP_FAILED` (medium) with the operation and the reason; a
+  decoding error becomes `CRYPTO_INPUT_UNPARSABLE`; a PKCS#12 that cannot be opened becomes `PKCS12_UNREADABLE`.
 
-- A program **without an extension** (`invoice`) or with an unlisted one (`notes.md`) gets no finding: the
-  comparison needs an extension, and non-executable mismatches need a known or text extension.
-- The PE test is only 2 bytes (`MZ`) and GZIP only 2 bytes (`1F 8B`): a text file `notes.txt` that begins with
-  `MZ` is reported as `EXECUTABLE_CONTENT` (false positive). Confirm with a PE parser before relying on it.
-- Containers are typed by their outer signature: a `.docx` and a `.jar` are both "ZIP / Office Open XML", so a
-  `.jar` renamed `.docx` gives no finding. HEIC and MP4 share `ftyp`.
-- Matching is on the content's first bytes only; the extension is case-insensitive (`.JPG` = `.jpg`).
-- No error rates have been measured on a labelled corpus ([admissibility.md](admissibility.md#consolidated-gap-list), G5).
+## B3 Recognising inputs by content
 
-## B5 Duplicate detection by digest
+`sniff()` never looks at the file name. DER objects are recognised by OpenSSL's own decoders (`d2i_X509`,
+`d2i_X509_CRL`, `d2i_X509_REQ`, `d2i_OCSP_RESPONSE`, `d2i_PKCS12`, `d2i_AutoPrivateKey`) and a bounds-checked walk of
+the CMS ContentInfo that separates an RFC 3161 token (eContentType id-ct-TSTInfo, 1.2.840.113549.1.9.16.1.4) from a
+PKCS#7 bundle. PEM is recognised by its labels; unarmoured base64 is decoded first. Hostile input gives `Unknown`,
+never an error. The kinds are: certificate, PEM bundle, PKCS#7, PKCS#12, CRL, OCSP response, timestamp token
+(TimeStampResp or bare TimeStampToken), private key (PKCS#8 plain or encrypted, PKCS#1, SEC1, legacy encrypted PEM)
+and CSR (PKCS#10).
 
-```text
-duplicate_groups(items)                                     src/core/src/report/mod.rs
-  key = primary digest (first selected algorithm)
-  only items that were hashed (no UNREADABLE) and have size > 0 (empty files are all identical)
-  groups = items sharing a key, if 2 or more            → audit: duplicate_group {algorithm, hash, items}
-  each member gets DUPLICATE (info) {algorithm, count, others}, others capped at 10 names + "… (+N)"
-```
+Field extraction (`parse.rs`): OpenSSL decides whether an object is well formed and supplies names, times,
+fingerprints and the self-signature check; `x509-parser` decodes the extensions into fields; `x509-ocsp` and `cms`
+decode structures the `openssl` crate does not expose. `certificate.txt` is OpenSSL's `X509_print` (`openssl x509
+-text -noout`). A PKCS#12 is opened with OpenSSL's `PKCS12_parse`; legacy encryptions (RC2-40, 3DES) need OpenSSL's
+legacy provider, which the vendored build lacks, so `p12-keystore` reads them instead. The password comes from the
+environment variable named by `--p12-pass-env` and is never logged.
 
-Two different files with the same SHA-256 would require a collision; no SHA-256 collision is publicly known, and
-the generic birthday bound for 256-bit digests is about 2¹²⁸ operations. With `md5` or `sha1` as the primary,
-deliberately colliding files can be produced (B3), so a duplicate group computed on MD5 alone proves less. The
-complete groups (paths, not only names) are in `statistics.json` and `hashes.csv`.
-<!-- /forge:domain -->
+## B4 RFC 5280 path validation as OpenSSL implements it
 
-## B6 The audit hash chain
+RFC 5280 §6 defines path validation: for each certificate from the anchor down to the target, check the signature
+with the issuer's key, the validity period against the validation time, the issuer/subject name chaining, revocation,
+basic constraints and path length, key usage, name constraints and policies, and reject unknown critical
+extensions. OpenSSL implements this in `X509_verify_cert()` (`crypto/x509/x509_vfy.c`): it first **builds** a path
+from the target through the untrusted certificates to a certificate in the trust store, then **verifies** it, and
+reports the first failure as an `X509_V_ERR_*` code with the depth at which it occurred (depth 0 = the target).
 
-Each line of `audit.jsonl` is one JSON object: `seq`, `ts_utc`, `run_id`, `actor`, `action`, optional `item`,
-`details`, `prev_entry_hash`, `entry_hash` ([audit.rs](../src/core/src/audit.rs)). `audit.log` is a readable copy of
-the same actions; it is not chained and not authoritative.
+How the tool calls it (`verify_once()` in chain.rs):
 
-```text
-canonical(e)      = JSON of e without "entry_hash"; keys sorted at every level; no whitespace; UTF-8,
-                    non-ASCII not escaped; integers only
-                    (Python: json.dumps(e, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
-entry_hash_n      = SHA-256( canonical(e_n) )                 hex, lower case
-prev_entry_hash_1 = 64 × "0";   prev_entry_hash_n = entry_hash_(n-1);   seq_n = n
-```
-
-**Worked example** (computed for this page with the rule above; `rv-certcheck verify-log` accepts these three lines):
-
-```text
-#1 canonical (287 bytes)
-{"action":"run_started","actor":"Ana Ruiz","details":{"algorithms":["sha256","md5"],"tool":"rv-certcheck",
-"version":"0.1.0"},"prev_entry_hash":"0000000000000000000000000000000000000000000000000000000000000000",
-"run_id":"20261021T152805Z-e8fd7a","seq":1,"ts_utc":"2026-10-21T15:28:05.817Z"}
-   entry_hash = 6db9fbe2ebb025947fc663b32c09cab8d2ed072e7ae5d7ec3250671c34ee71c9
-
-#2 canonical (245 bytes)
-{"action":"inputs_resolved","actor":"Ana Ruiz","details":{"bytes":234,"items":3},
-"prev_entry_hash":"6db9fbe2…34ee71c9","run_id":"20261021T152805Z-e8fd7a","seq":2,"ts_utc":"2026-10-21T15:28:05.819Z"}
-   entry_hash = 4c78f96cb3e945d2705676d5bafa1942cad3146342a9fff9bf94e89f905754aa
-
-#3 canonical (381 bytes)
-{"action":"item_hashed","actor":"Ana Ruiz","details":{"bytes_read":61,"hashes":{"sha256":"80e089ad…183c3c"},
-"index":2,"mtime_unchanged":true},"item":"D:\\ev\\acta.txt","prev_entry_hash":"4c78f96c…905754aa", …,"seq":3,…}
-   entry_hash = 558b0ea25f29bcc8af1cbbcbbc191d1511ad8d040fffea1db6d1a79f76376223
-
-#2 edited ("items":2) → f6a7e0fc0991175781ba340d8a338b11060c28db304e3e33bcf12f3e30a04264 ≠ stored
-```
-
-What `verify-log` prints for the three variants (real output):
-
-```text
-original           OK  3 entries, chain intact: ./audit.jsonl                                        exit 0
-#2 edited          BROKEN  - line 2: entry_hash does not match its content (edited entry)            exit 3
-#2 deleted         BROKEN  - line 2: sequence 3 where 2 was expected (deleted or re-ordered entry)
-                           - line 2: prev_entry_hash does not link to the previous entry             exit 3
-#3 removed (end)   OK  2 entries, chain intact                                                       exit 0
-                       truncation not detectable without a timestamp or case record
-```
-
-The last variant is why `verify-log` also compares the end of the log with records kept outside it (next
-paragraphs): on a standalone log with no timestamp it can only say so.
-
-```mermaid
-flowchart LR
-    L["read line n<br/>(blank lines skipped)"] --> J{"valid JSON<br/>object?"}
-    J -->|no| X["broken: not JSON"]
-    J -->|yes| S{"seq = expected?"}
-    S -->|no| D["broken: deleted or re-ordered"]
-    S -->|yes| P{"prev_entry_hash =<br/>previous entry_hash?"}
-    P -->|no| D
-    P -->|yes| H{"SHA-256(canonical) =<br/>stored entry_hash?"}
-    H -->|no| Y["broken: edited"]
-    H -->|yes| L
-```
-
-| Proves | Does not prove, on its own |
+| Setting | Value |
 | --- | --- |
-| No entry was edited, inserted, deleted or reordered **before the last entry present** | That entries were not removed **from the end**: a shorter chain is still valid (see the last line above). Only an anchor outside the log shows that |
-| The order of work equals the order of entries | That the whole chain was not recomputed by someone who rewrote it from scratch |
-| Report and output digests are bound to the run | When the entries were written (host clock, `ts_utc`) |
+| Trust store | Exactly the certificates of the `--anchor` values (none = nothing trusted; chains are still built and reported untrusted) |
+| Untrusted chain | The run's pool, minus the target itself |
+| Time | `X509_VERIFY_PARAM_set_time(at)` (sets `X509_V_FLAG_USE_CHECK_TIME`) |
+| Purpose | `X509_PURPOSE_SSL_SERVER`, `SSL_CLIENT`, `CODE_SIGN`, `SMIME_SIGN` or `TIMESTAMP_SIGN` for the purposes that have one; none for `any` and `document-signing` |
+| CRLs | Written as PEM to a temporary file (the crate adds CRLs to a store only through a file lookup), then `X509_V_FLAG_CRL_CHECK` and possibly `CRL_CHECK_ALL` (see [B7](#b7-revocation-crl-and-ocsp-rules)) |
+| Policy checking | OpenSSL's defaults (no explicit policy required) |
 
-External anchors close those gaps: a complete run ends with `run_finished` (or `run_failed` / `run_cancelled`);
-the case log records the run's final entry count and head ([B7](#b7-the-case-folder)); the RFC 3161 token binds
-entry *N* ([B8](#b8-rfc-3161-trusted-timestamp)); the statistics report prints the head and entry count at the
-time it was written; a signed PDF report binds that head to the examiner's key.
+Each depth of the path becomes a node in `chain.json` with OpenSSL's code and reason text
+(`X509_verify_cert_error_string`) at that depth, the anchor it matched, its revocation status and its trust-list
+membership. A node is `ok`, `error`, or `incomplete` (the top of a path that reached no anchor).
 
-`verify-log` uses the first two automatically ([src/core/src/verify.rs](../src/core/src/verify.rs)):
+The verdict is mapped from OpenSSL's codes as follows (`validate_chain()`):
 
-| Anchor found | Check | Result line |
+| OpenSSL code (`X509_V_ERR_…`) | Finding | Verdict status |
 | --- | --- | --- |
-| `timestamp-<K>.json` | entry `#K` exists and its hash is the token's imprint; every `timestamp_obtained` entry still has its token file | `truncation: entries up to #K are anchored by the RFC 3161 timestamp (…); n entries after it (…) cannot be proven complete` |
-| run in `<CASE>/runs/<tool>/<RUN-ID>/logs` | `run_finished` in the case log: entry `#M` = `audit_entries` exists with hash `audit_head`; only `timestamp_obtained` after it | `truncation: the final entry #M is anchored by the case log (run_finished)` |
-| neither | — | `truncation not detectable without a timestamp or case record` |
+| 2, 18, 19, 20, 21, 27, 28 (no issuer, self-signed not trusted, unable to verify, untrusted, rejected) | `CERT_CHAIN_UNTRUSTED` (target subject) | `untrusted` |
+| 4, 6, 7 (signature cannot be decrypted / issuer key undecodable / signature failure) | `CERT_SIGNATURE_INVALID` | `invalid` |
+| 10 (certificate has expired) | `CERT_EXPIRED_AT_DATE` | `invalid` |
+| 9 (not yet valid) | `CERT_NOT_YET_VALID_AT_DATE` | `invalid` |
+| 23 (revoked) | `CERT_REVOKED`, unless the tool's own revocation check says revoked (reported with reason and date instead) or good at the date (see B7) | `invalid` |
+| 26, 39 (invalid purpose / key usage lacks digitalSignature) | `CERT_PURPOSE_MISMATCH` | `invalid` |
+| 47–49, 51–53 (name-constraint violations and unsupported constraints) | `CERT_NAME_CONSTRAINT_VIOLATION` | `invalid` |
+| 3, 5, 8, 11, 12, 15, 16, 33, 35, 36, 44, 54 (CRL missing, undecodable, bad signature, not yet valid, expired, bad dates, issuer, key usage, critical extension, scope, path) | `REVOCATION_UNKNOWN` | `invalid` |
+| any other code (e.g. 13/14 bad notBefore/notAfter field, 24 no issuer public key, 25 path length exceeded, 32 issuer lacks keyCertSign, 34 unhandled critical extension, 37 CA certificate used as CA without CA:TRUE) | `CERT_CHAIN_UNTRUSTED` with OpenSSL's reason and code | `invalid` |
+| none | `CERT_CHAIN_VALID` (subject, anchor, instant) | `valid` |
 
-A log that ends before `#K` or `#M` is reported as `truncated: …` (exit 3). The highest anchor wins; when it is
-the final entry, the log is complete as far as anything outside it can tell.
+The status is `untrusted` whenever any untrusted-class code was found, else `invalid` whenever any error, a
+revoked node or a failed tool policy check (document signing) was found, else `valid`. `CERT_CHAIN_VALID` can
+coexist with `REVOCATION_UNKNOWN`, `CERT_WEAK_KEY` or `CERT_WEAK_SIGNATURE_ALGORITHM`: OpenSSL accepts those, and
+the tool reports them as separate findings.
 
-Independent check: [tests/verify_chain.py](../tests/verify_chain.py) re-implements the chain in Python (standard
-library) and re-hashes the evidence listed in `hashes.csv` (it needs that file: it is a run checker, not a case-log
-checker). The append-only file is opened with `create_new` + `append`: an existing log is never overwritten; only
-the `timestamp` command re-opens a log, after verifying it.
+## B5 Collecting every error: the re-run approach
 
-## B7 The case folder
+`openssl verify` lists several errors because its callback returns 1 ("continue") after each one. The `openssl`
+crate exposes no safe store-verify callback, and the certificate layer forbids `unsafe`, so the tool reproduces
+the continuing callback by **re-running** `X509_verify_cert()` with the class of the error just reported switched
+off, which is what returning 1 from the callback does for that class (`run_walk()` in chain.rs):
 
-Layout and contract: [case-folder.md](case-folder.md). This section explains why the design holds.
-
-```text
-<CASE>/case.json               {"schema":"rakvor.case/1","case_id","jurisdiction","created_utc","created_by":{…}}
-<CASE>/case-log.jsonl          same chain rule as audit.jsonl; first entry case_created (carries case_json_sha256)
-<CASE>/case-log.lock           exists only while a tool appends (created with create_new, removed on drop)
-<CASE>/evidence/registry.json  {"schema":"rakvor.registry/1","items":[{evidence_id, path, size, hashes,
-                               registered_by:{tool, version, run_id, audit_seq}, registered_utc}]}
-<CASE>/evidence/registry.csv   evidence_id,path,size,<algorithms present>,run_id
-<CASE>/runs/<tool>/<RUN-ID>/{logs,reports}/
+```mermaid
+flowchart TD
+    P0["Pass 0: no CRL<br/>learn the path, choose CRL flags"] --> P1["Run X509_verify_cert"]
+    P1 -->|ok| END["Done: errors = every error found, in order"]
+    P1 -->|"error (code, depth)"| REC["Record (depth, code, reason)<br/>if not already recorded"]
+    REC --> C{"Class of the code?"}
+    C -->|"2, 18–21, 27, 28<br/>no anchor reached"| A["Add the top of the built path to the store<br/>(PARTIAL_CHAIN); never marked as an anchor"]
+    C -->|"9–12<br/>time"| B["X509_V_FLAG_NO_CHECK_TIME"]
+    C -->|"26, 39<br/>purpose"| D["No purpose"]
+    C -->|"CRL codes, 23"| E["CRL checking off<br/>(tool's own check still runs)"]
+    C -->|"anything else<br/>signature, constraints…"| S["Stop; note 'later checks of the path could not be run'"]
+    A --> P1
+    B --> P1
+    D --> P1
+    E --> P1
+    S --> END
 ```
 
-Real registry entry from an intake of the sample (path shortened):
+- The loop runs at most 12 times. The **first** error is OpenSSL's own first answer, the one `openssl verify`
+  prints; `errors` lists every error found with its depth; the verdict stays failed whenever any error was found.
+- Once `NO_CHECK_TIME` is set, OpenSSL stops reporting time errors, while its CLI callback would report one at
+  each expired depth. The tool therefore compares every certificate of the final path with the instant using
+  OpenSSL's own `ASN1_TIME` comparison and adds codes 9 and 10 at the depths concerned, with a note.
+- A CRL-time error (11, 12) switches off the **time check**, not the CRL, because OpenSSL's CLI callback continues
+  and still applies the CRL; certificate dates are then re-checked as above.
+- When the walk stops on a code it cannot switch off (a broken signature, a name-constraint violation), later
+  checks of that path are not run; the verdict's `notes` say so. Every such stop is visible in `chain.json`.
+- Oracle: for every fixture, the first code equals `openssl verify -attime -purpose [-crl_check[_all] -CRLfile]
+  -CAfile -untrusted`, and every error the CLI prints is among the verdict's errors
+  ([analysis_oracle_openssl.rs](../src/certs/tests/analysis_oracle_openssl.rs)).
 
-```json
-{
-  "evidence_id": "E0003",
-  "hashes": { "md5": "d0532b1672c85a82f561ad2de7e9a57a",
-              "sha256": "42503ebb0f9892b30b72e11cfa0cbf5bcb5d60f667d611fa9598c9b4e835c643" },
-  "path": "D:\\export\\foto-vacaciones.jpg",
-  "registered_by": { "audit_seq": 12, "run_id": "20261021T152805Z-e8fd7a", "tool": "rv-certcheck", "version": "0.1.0" },
-  "registered_utc": "2026-10-21T15:28:05.909Z",
-  "size": 112
-}
-```
+## B6 The validation instant (`--at`)
 
-`registered_by.audit_seq` = 12 points at the `item_hashed` entry of that run's `audit.jsonl` that holds the same
-digests, so every registry row can be traced to a sealed log entry.
-
-### Rules
-
-| Rule | Code | Why |
+| `--at` | Instant used | `at_source` in the verdict |
 | --- | --- | --- |
-| A broken case is never extended | every append re-runs `verify_log_and_registry` under the lock: case-log chain, first entry `case_created`, `case.json` digest, registry digest = last `registry_sha256` in the log | a tool cannot silently build on an edited case |
-| One writer at a time | `case-log.lock` created exclusively; wait ≤ 30 s; a lock older than 600 s is reported as stale and **never deleted automatically** | two tools never interleave entries |
-| Only the intake role writes the registry | `register` (intake); analysis tools only read it | the reference values cannot drift |
-| Paths are compared normalised | `normalize_path`: absolute, lexically normalised (`.`/`..` removed); `same_path`: case-insensitive on Windows (`to_lowercase`), exact elsewhere | the same file is found again by path; `D:\Evidence\a.pdf` = `d:\evidence\A.PDF` on Windows |
-| A case run always shares an algorithm with the registry | `ensure_case_algorithm`: if the selection is disjoint from the algorithms present in **every** registered item, add SHA-256 (or the registry's first algorithm), replacing the second choice if two were selected; audited as `case_algorithm_added` | comparison is always possible |
-| Evidence ids are never reused | next id = highest number + 1; same path **and** same content keeps its id | an id means one content forever |
+| `now` (default) | The analysis time | `now` |
+| `YYYY-MM-DD` | Midnight UTC of that day | `given` |
+| RFC 3339 (`2025-03-14T09:30:00-05:00`) | Converted to UTC | `given` |
+| `signing-time` | The signing time **supplied by the caller**; none supplied → now | `signing-time`, or `signing-time-unavailable-now` with a note |
 
-### Matching an item against the registry (analysis role)
+**v0.1 limit.** Core never supplies a signing time to the chain check (`ChainRequest::signing_time` is always
+`None` in [certscan.rs](../src/core/src/certscan.rs)), so `--at signing-time` always judges *now* in `analyze`
+and says so in each verdict. Give the date explicitly (`--at 2025-03-14`) until the signed-document support of
+v0.2 reads it from the object. The TSA certificate of an RFC 3161 token is the exception: it is always judged at
+the token's genTime ([B8](#b8-rfc-3161-tokens-and-ess-signing-certificate)).
 
-```mermaid
-stateDiagram-v2
-    [*] --> ById: item selected with --evidence
-    [*] --> ByPath: other items
-    ById --> Compare: registry entry of that id
-    ByPath --> Compare: latest entry with the same normalised path
-    ByPath --> ByContent: no entry with that path
-    ByContent --> Compare: first entry whose common digests match
-    ByContent --> NotRegistered: none
-    Compare --> Verified: every common algorithm equal
-    Compare --> Mismatch: one algorithm differs (or none in common)
-    Verified --> [*]: evidence_verified_against_case match true
-    Mismatch --> [*]: EVIDENCE_HASH_MISMATCH_WITH_CASE (high), analysis continues
-    NotRegistered --> [*]: EVIDENCE_NOT_IN_CASE_REGISTRY (medium)
-```
+All times are compared as UTC seconds. Why an expired certificate can be fine: RFC 5280 judges validity at the
+validation time; for a signature the relevant time is the signing time, which needs independent evidence (a
+timestamp token, or a time recorded by a trusted system). That reasoning belongs to the examiner; the tool judges
+at the instant given and prints it.
 
-<!-- forge:domain -->
-This tool is the **intake** role (`CASE_ROLE = Intake`): it does not run the matching above. It registers every
-item that was hashed: same path and same content keeps the existing id (`already_registered`); a registered path
-with other content gets a **new** id and the finding `REGISTRY_PATH_CONTENT_CHANGED` (medium); anything else gets
-a new id. Unreadable items are not registered. The analysis matching is in the same code and runs in every tool
-scaffolded from this one.
-<!-- /forge:domain -->
+## B7 Revocation: CRL and OCSP rules
 
-### Cross-linking of the two chains
+The tool runs its **own** revocation check for every non-anchor node of the path, whatever OpenSSL's CRL flags
+(`check_detailed()` in revocation.rs). Rules, quoted from the code:
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant C as case-log.jsonl
-    participant A as run audit.jsonl
-    C->>C: #2 run_started {run_dir, role}  entry_hash 57d5208e…a6a0
-    A->>A: #1 run_started
-    A->>A: #2 case_linked {case_log_seq_at_start 2, case_log_head_at_start 57d5208e…a6a0, registry_sha256}
-    C->>C: #3 evidence_registered {added E0001–E0003, registry_sha256 60c195b9…199c}
-    A->>A: #14–#16 evidence_registered {evidence_id, case_log_seq 3, registry_sha256}
-    A->>A: #23 run_finished  entry_hash 92040a6e…ea62
-    C->>C: #4 run_finished {audit_entries 23, audit_head 92040a6e…ea62}
-```
+**A CRL covers a certificate** (RFC 5280 §5, §6.3) when its issuer name equals the certificate's issuer name and
+its signature verifies with the issuer certificate's public key; an issuer whose keyUsage is present without
+cRLSign is refused. **Indirect CRLs, delta CRLs and delegated CRL signers are not supported in v0.1.**
 
-(Values from a real intake of the sample.) `verify-case` checks, for every `run_started` in the case log: the run's
-`audit.jsonl` chain and timestamp tokens; that its `case_linked` names this case and quotes the `run_started` hash;
-and that entry `audit_entries` of the run has hash `audit_head`, with only `timestamp_obtained` allowed after it.
-It also warns about run folders the case log never announced. Editing either chain therefore breaks a link, and
-truncating a finished run's audit log is detected here (and by `verify-log` on that run, which finds the case log
-from the run folder's location, [B6](#b6-the-hash-chained-audit-log)).
+**An OCSP response covers it** (RFC 6960) when its status is `successful`, OpenSSL's `OCSP_basic_verify` accepts
+its signature (by the issuer itself, or by a responder certificate the issuer delegated with id-kp-OCSPSigning;
+the responder certificate is judged at producedAt) and it holds a SingleResponse for the certificate's CertID
+built with SHA-1 or SHA-256. An `unknown` answer does not cover it.
 
-With `--rehash`, `verify-case` also re-hashes the evidence: every registry entry whose path is still a file is
-read once with the entry's own algorithms (at most two, standard order) and compared with the registry. A path
-registered more than once (its content changed between intakes, so it received a new id) is compared with its
-latest registration; the earlier ids are listed as superseded. A difference is a problem (exit 3); an unreachable
-or unreadable file is a warning, because evidence copies often live on another workstation.
+**Freshness and dates**, for each covering CRL or OCSP answer, at the validation instant *at*:
 
-What `verify-case` does **not** do: verify TSA signatures (B8), or prove that the registry's first content equals
-the original source.
-
-## B8 RFC 3161 trusted timestamp
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant T as trust.rs
-    participant L as audit.jsonl
-    participant A as TSA
-    T->>L: … last item_reports_written (entry N, entry_hash H)
-    T->>A: HTTP POST application/timestamp-query, TimeStampReq v1 {SHA-256, H}, nonce, certReq
-    A-->>T: TimeStampResp, status + token (CMS SignedData with TSTInfo)
-    T->>T: status granted? TSTInfo imprint = H? nonce echoed (when present)?
-    T->>L: timestamp_obtained {covers_seq N, head H, gen_time, tsa, token_sha256}
-    T->>L: statistics_report_written, run_finished (after the token)
-```
-
-The **message imprint is the chain head itself**: the 32 bytes of `entry_hash` of entry *N*, declared as a SHA-256
-value. It is not hashed again, so `openssl ts -verify -digest <H>` works directly. Request layout (69 bytes; head
-from the worked example of B6, example nonce):
-
-```text
-30 43                                   TimeStampReq SEQUENCE, 67 bytes
-   02 01 01                             version v1
-   30 31                                messageImprint
-      30 0D 06 09 60 86 48 01 65 03 04 02 01 05 00     hashAlgorithm sha256 (2.16.840.1.101.3.4.2.1), NULL
-      04 20 55 8B 0E A2 … 37 62 23      hashedMessage = entry_hash (32 bytes)
-   02 08 1F 3A 5C 7E 9B 2D 4F 60        nonce (8 bytes, high bit cleared: positive INTEGER)
-   01 01 FF                             certReq TRUE
-```
-
-- Nonce: first 8 bytes of SHA-256(clock, process id), high bit cleared. It detects a replayed response; it is not
-  a secret.
-- The response is limited to 1 MiB and 15 s. `TSTInfo` is read by a minimal DER walk because many TSAs write
-  fractional seconds in `genTime`, which strict decoders reject; `gen_time` is stored to the second. Example: the
-  test TSA's token said `15:30:01.367038`, the log says `2026-10-21T15:30:01Z`.
-- Stored next to the log: `timestamp-<NNNNN>.tsr` (the DER **TimeStampResp**, not only the token) and
-  `timestamp-<NNNNN>.json` (tsa, gen_time, covers_seq, head, token_sha256, file).
-- Offline → `timestamp_pending` and the run completes; `rv-certcheck timestamp <log>` later re-verifies the chain and
-  appends `timestamp_obtained` for the then-current head (earlier entries are never rewritten).
-- `verify-log` and `verify-case` re-check: that entry `covers_seq` is still in the log (otherwise: `truncated`), the
-  `.tsr` SHA-256 against `token_sha256`, the TSA status, and that the imprint equals the `entry_hash` of
-  `covers_seq`. They do **not** verify the TSA's signature, certificate chain,
-  policy OID or accuracy. Do that with OpenSSL against the TSA's published chain
-  ([usage.md](usage.md#6-timestamps)) before relying on the time in court (gap G18). Real check of the test token:
-  `openssl ts -verify -digest 53b0de42…a91a61 -in timestamp-00018.tsr -CAfile ca.pem -untrusted tsa.pem` →
-  `Verification: OK`.
-- The default TSA URL is plain HTTP; integrity rests on the TSA's signature, which is why the OpenSSL check
-  matters. eIDAS qualified status depends on the TSA chosen ([admissibility.md](admissibility.md)).
-
-Standards: RFC 3161 (Time-Stamp Protocol), RFC 5816 (ESSCertIDv2 update), RFC 5652 (CMS).
-
-## B9 Signed PDF reports
-
-<!-- forge:domain -->
-Reports are written by a small built-in PDF writer ([report/pdf.rs](../src/core/src/report/pdf.rs)): PDF 1.4,
-A4, the standard Helvetica, Helvetica-Bold and Courier fonts with WinAnsiEncoding (English, Spanish and French
-characters; anything else becomes `?`), no embedded fonts, one cross-reference table, one `%%EOF`.
-<!-- /forge:domain -->
-
-With `--sign-cert`, the file is written **once** with a signature placeholder and then signed in place (no
-incremental update):
-
-```text
-technical.en.pdf of the sample (39 620 bytes), real values
-… 9 0 obj << /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached
-             /ByteRange [0 0000006359 0000039129 0000000491] /Contents <3082…000> /M (D:…) /Reason (…) >>
-  widget /FT /Sig /T (RakvorExaminerSignature), invisible, on page 1;  catalog /AcroForm /SigFlags 3
-0                  6359                                   39129              39620
-├──── signed ──────┤<── /Contents: 32 770 bytes ─────────>├──── signed ──────┤
-                     "<" + 32 768 hex digits + ">"  = room for 16 384 bytes of CMS (2 086 used here)
-```
-
-1. Write the whole PDF with `/ByteRange [0 0000000000 0000000000 0000000000]` and `/Contents <000…0>`, and keep
-   the offset at which the signature dictionary object was written (the xref offset of `9 0 obj` above).
-2. Locate both placeholders **inside that object only** — page text that happens to contain `/Contents <0000` or
-   the byte-range marker is never touched (unit test `placeholder_bytes_in_page_text_are_left_alone`) — and fill
-   the byte range with fixed-width (10-digit) numbers, so no offset moves.
-3. Sign `file[0 .. 6359] ‖ file[39129 .. 39620]` ([trust.rs](../src/core/src/trust.rs) `PdfSigner`): CMS
-   SignedData, detached, SHA-256, RSA PKCS #1 v1.5, signed attributes content-type, signing-time and
-   message-digest, certificates from the `.p12`/`.pfx`. RSA keys only.
-4. Write the DER as upper-case hex into the placeholder.
-
-Independent check of the file above with pyHanko: `INTACT:UNTRUSTED,UNTOUCHED`, coverage `ENTIRE_FILE`, digest
-SHA-256 (untrusted only because the test certificate has no trusted root). The trust test does the same on every
-signed PDF of a run ([tests/validate_pdf_signature.py](../tests/validate_pdf_signature.py), through
-`RV_TEST_PYTHON`): each must be intact and cryptographically valid; an untrusted chain is expected with the test CA.
-
-This is a plain ISO 32000-1 CMS signature. It is not a PAdES baseline signature (ETSI EN 319 142-1: SubFilter
-`ETSI.CAdES.detached` and a signing-certificate-v2 attribute), it carries no signature timestamp and no revocation
-data. Its legal weight depends on the certificate ([admissibility.md](admissibility.md), gap G3). The certificate
-subject and SHA-256 fingerprint are logged as `signing_certificate_loaded` and printed on every report (HTML, PDF,
-and `run.pdf_signer_certificate_sha256` in the JSON); the password is never logged, and the interactive prompt does
-not echo it.
-
-## B10 Custody forms
-
-One form per item, `custody.json` plus HTML and PDF in the jurisdiction's language and in English
-([report/mod.rs](../src/core/src/report/mod.rs) `custody_*`, [templates/custody.html](../templates/custody.html),
-[schemas/item-custody.schema.json](../schemas/item-custody.schema.json)).
-
-| Field | Colombia (`co`, Spanish) | France (`fr`, French) | Filled from |
-| --- | --- | --- | --- |
-| Title and legal basis | Ley 906 de 2004 arts. 254–266, Fiscalía manual, Ley 527 de 1999 | CPP arts. 156 ff.; seal number refers to the judicial *scellé* | i18n catalogue |
-| Case | Case number (NUNC) | Case / procedure reference | `case_id` |
-| Item code | Evidence item (EMP/EF) code | Seal number | evidence id `E0001…` in a case folder, else `<RUN-ID>-<NNNNN>` |
-| Registered at intake | date and time (UTC) | same | registry `registered_utc` (case folder only) |
-| Description, location | file name · size · detected type; path of the examined copy | same | the run |
-| Integrity values | every digest of the run | same | `item_hashed` |
-| Operations | tool, version, run id, start and end (UTC), audit entries `#first–#last` | same | the run |
-| Transfers | 6 blank rows: date and time, delivered by, received by (name, ID, signature), purpose, condition of packaging / media | same | to sign by hand |
-| Signatures | examiner, receiver | same | to sign by hand |
-
-`custody.json` lists `transfers: []`: the tool never invents a transfer; the physical chain is completed by
-people. The form is a working aid, not the official Fiscalía *Registro de Cadena de Custodia* or a French
-*scellé* record ([admissibility.md](admissibility.md#consolidated-gap-list), G9).
-
-## B11 Determinism and repeatability
-
-| Same input + same build gives the same … | Varies between runs |
+| Situation | Result |
 | --- | --- |
-| evidence digests, `bytes_read`, detected types, findings and their parameters | `run_id`, `ts_utc`, every `entry_hash` (they include time) |
-| item order and numbering (sorted paths), duplicate groups | absolute paths of the outputs, host, OS user (in `environment.json`) |
-| `hashes.csv` rows | report digests (reports print run id, times, the audit head); PDF `/CreationDate` |
-| evidence ids for an unchanged path and content (case folder) | the RFC 3161 token and nonce |
+| Listed as revoked with revocationDate ≤ *at* (reason other than removeFromCRL) | `revoked`, with reason and date |
+| Listed as revoked with revocationDate > *at* | `good` at that date, with the note "revoked on …, after the date checked" |
+| Not listed; thisUpdate ≤ *at* ≤ nextUpdate (or nextUpdate absent) | `good` |
+| Not listed; thisUpdate > *at* (issued after the date checked) | `good`, with the note "issued after the date checked … lists no revocation" |
+| Not listed; nextUpdate < *at* and issued before *at* | stale: not used (reason recorded) |
+| Nothing usable | `unknown`, with every reason (`REVOCATION_UNKNOWN` for the target only) |
 
-Measured for this page: the Rust and Python builds of this tool, run on the sample with the same algorithms, gave
-identical digests, detected types and findings (compared on every `technical.json`). Item numbers are identical
-too: both profiles make each path absolute and lexically normalised and sort by that string **bytewise (UTF-8)**,
-so `a-b/x.txt` comes before `a/x.txt` ('-' 0x2D < '/' 0x2F) and `B.txt` before `a.txt`. The cross-profile test
-compares the numbering of such a folder ([input.rs](../src/core/src/input.rs) `items_are_sorted_by_normalised_path_bytes`;
-`cross_language_case_verification` with `RV_CROSS_PROJECT`), and CI verifies a case folder written by the Python
-profile ([tests/golden/](../tests/golden/regenerate.py)). File names that are not valid UTF-8 are outside this
-contract.
+A revoked answer from any source wins over a good one. The second-to-last rule is a deliberate choice: a list
+issued after the date checked that does not list the certificate is taken as evidence it was not revoked at that
+date (a revocation cannot be back-dated to before a list that omits it without the CA publishing contradictory
+lists). An opposing expert may argue otherwise; the note makes the basis visible.
 
-`environment.json` records the tool version, `rustc` version, target triple, every package and version listed in
-`Cargo.lock` (495 entries at this commit, for all platforms — not only those compiled into this binary), OS,
-host, OS user, working directory and command line (or the GUI settings), so a second examiner can rebuild the same
-version and repeat the run (ISO/IEC 27037 repeatability and reproducibility, [admissibility.md](admissibility.md#61-isoiec-270372012--identification-collection-acquisition-and-preservation-of-digital-evidence)).
+**OpenSSL's CRL flags.** `CRL_CHECK` is set when a CRL by the target's issuer is supplied, plus `CRL_CHECK_ALL`
+when every certificate of the path below the anchor has a CRL by its issuer; otherwise OpenSSL's CRL checking is
+off and a note says why. OpenSSL does not compare the revocation date with the validation time: when it reports
+code 23 but the tool's check says *good at that date*, the tool keeps `good` and records OpenSSL's code in the
+notes.
 
-<!-- forge:domain -->
-## B12 What each finding does not prove
+**`--online`.** For every certificate of the built path that has an issuer in it, the tool fetches each CRL
+distribution point URL (GET) and asks each AIA OCSP URL (POST, CertID with SHA-1), then validates again with the
+answers ([online.rs](../src/certs/src/analysis/online.rs)): HTTP and HTTPS only (an `ldap://` CDP is refused), a
+15 s timeout per request, at most 20 MiB per response, `Cache-Control: no-cache`, no cache. Each fetch (URL, time,
+HTTP status, size, response SHA-256 or error) is in the verdict's `online_fetches`, in `chain.json` and in the
+audit entry `revocation_fetched`. Only HTTP 200 bodies are used.
 
-| Finding (severity) | Rule (code) | Shows | Does not prove |
-| --- | --- | --- | --- |
-| `EMPTY_FILE` (info) | bytes read = 0 | The file has 0 bytes | Whether it was emptied on purpose or created empty |
-| `EXTENSION_MISMATCH` (medium) | signature found; extension not in its list; extension known or textual ([B4](#b4-type-detection-by-magic-bytes-and-extension-mismatch)) | Name and content signature disagree | An attempt to hide content; renaming is common and often innocent |
-| `EXECUTABLE_CONTENT` (high) | PE or ELF signature; extension not an executable one | A program stored under a non-program name | That the program is malicious; a 2-byte `MZ` match can be a false positive |
-| `DUPLICATE` (info) | same primary digest, size > 0 ([B5](#b5-duplicate-detection-by-digest)) | Identical content in several files | Who copied the file, when, or which copy is the original |
-| `UNREADABLE` (high) | open or read error | The OS error text | That the file is damaged; permissions and locks cause this |
-| `REGISTRY_PATH_CONTENT_CHANGED` (medium) | intake: registered path, other content | The path now holds other content (new evidence id) | Which version is the original, or why it changed |
-<!-- /forge:domain -->
+## B8 RFC 3161 tokens and ESS signing-certificate
 
-Case-folder findings (shared by every tool in the analysis role):
+RFC 3161 defines a TimeStampResp (PKIStatus + TimeStampToken) whose token is a CMS SignedData (RFC 5652) with
+eContentType id-ct-TSTInfo. TSTInfo holds the policy OID, the messageImprint (hash algorithm + digest of the data),
+the serial number, **genTime**, and optionally accuracy, ordering, nonce and the TSA name. RFC 3161 §2.4.1 requires
+the signer to identify its certificate with the ESS signing-certificate attribute (RFC 2634; v2 for SHA-2,
+RFC 5035), and §2.3 requires the TSA certificate to carry a **critical** extended key usage with only
+id-kp-timeStamping.
 
-| Finding (severity) | Rule (code) | Shows | Does not prove |
-| --- | --- | --- | --- |
-| `EVIDENCE_HASH_MISMATCH_WITH_CASE` (high) | matched entry, a common algorithm differs ([B7](#matching-an-item-against-the-registry-analysis-role)) | The file examined is not bit-identical to the registered item | Who changed it, when, or whether deliberately |
-| `EVIDENCE_NOT_IN_CASE_REGISTRY` (medium) | no entry by id, path or content | Continuity from intake cannot be shown for this file | That the file is altered or irrelevant |
+TSTInfo is read with a bounds-checked DER walk that accepts fractional seconds in genTime (some TSAs emit them and
+strict decoders reject them). Verification, each step reported separately (`verify_timestamp_token()`):
 
-The exact wording printed in reports is in [i18n/en.json](../i18n/en.json) (`findings`; also es, fr); a test
-enforces the same keys in all three languages.
+1. A TimeStampResp must have status `granted` or `grantedWithMods` (a bare token has none).
+2. The CMS signature over TSTInfo verifies (`PKCS7_verify` with `PKCS7_NOVERIFY`: signature only, chain checked in
+   step 4), and the signed content is the token's own TSTInfo.
+3. The ESS signingCertificate (SHA-1 certHash) or signingCertificateV2 (default SHA-256, or the algorithm given)
+   names the signer certificate: its hash over the certificate's DER equals certHash. The signer is found by
+   issuer + serial or by SKI, among the token's certificates and then the run's pool.
+4. The TSA certificate's chain is valid **at genTime** for purpose `timestamping` (OpenSSL's
+   `X509_PURPOSE_TIMESTAMP_SIGN`), through the same `validate_chain()` with the run's anchors, CRLs and OCSP.
+5. genTime is inside the TSA certificate's validity period.
+6. With data supplied: its digest with the token's hash algorithm equals the messageImprint.
 
-## B13 References
+All steps pass → `TIMESTAMP_TOKEN_VALID` (genTime, TSA, policy, hash algorithm); any failure →
+`TIMESTAMP_TOKEN_INVALID` with every reason; the TSA chain's own findings are added. **v0.1 limit:** `analyze`
+calls step 6 with no data (`verify_timestamp_token(&token, None, …)` in certscan.rs), so the token is not linked
+to any evidence file during a run; compare the imprint with the file's digest by hand (`hashes.csv`, or
+`openssl ts -verify -data FILE -in TOKEN.tsr -CAfile …`). The audit log's own timestamp is handled separately by
+the core ([B17](#b17-audit-chain-case-folder-timestamp-of-the-log)).
 
-Standards and specifications
+## B9 Weak key and signature thresholds
 
-- NIST FIPS 180-4 (Secure Hash Standard, 2015); NIST FIPS 202 (SHA-3, 2015); RFC 1321 (MD5, 1992).
-- J. O'Connor, J.-P. Aumasson, S. Neves, Z. Wilcox-O'Hearn, *BLAKE3: one function, fast everywhere* (2020).
-- RFC 3161 (Time-Stamp Protocol, 2001); RFC 5816 (ESSCertIDv2 update for RFC 3161, 2010); RFC 5652
-  (Cryptographic Message Syntax, 2009); RFC 8017 (PKCS #1 v2.2, 2016); RFC 5280 (X.509 PKI profile, 2008).
-- ISO 32000-1:2008, *PDF 1.7* (§12.8 digital signatures); ETSI EN 319 142-1 (PAdES baseline signatures).
-- ISO/IEC 27037:2012 (identification, collection, acquisition and preservation of digital evidence) — see
-  [admissibility.md](admissibility.md) for what was verified of it.
+These are the tool's policy, not OpenSSL's (OpenSSL at its default security level accepts all of them in
+verification). They apply to every certificate parsed and to every node of a path (`weak_key()`,
+`weak_signature()` in parse.rs):
 
-Academic and practitioner literature
+| Finding | Rule |
+| --- | --- |
+| `CERT_WEAK_KEY` | RSA modulus < 2048 bits; any DSA key; EC field size < 256 bits. Ed25519, Ed448 and curves of ≥ 256 bits (P-256, P-384, P-521, brainpoolP256r1 and above) are not flagged |
+| `CERT_WEAK_SIGNATURE_ALGORITHM` | Signature OID md2WithRSA (1.2.840.113549.1.1.2), md4WithRSA (…1.3), md5WithRSA (…1.4), sha1WithRSA (…1.5), sha1WithRSA OIW (1.3.14.3.2.29), dsa-with-SHA1 (1.2.840.10040.4.3), ecdsa-with-SHA1 (1.2.840.10045.4.1), or an OpenSSL algorithm name starting or ending with md2/md4/md5/sha1 |
 
-- X. Wang, H. Yu, "How to Break MD5 and Other Hash Functions", EUROCRYPT 2005.
-- M. Stevens, E. Bursztein, P. Karpman, A. Albertini, Y. Markov, "The first collision for full SHA-1",
-  CRYPTO 2017.
+RSASSA-PSS with SHA-1 is **not** detected: the hash is in the algorithm parameters, not in the OID. The 2048-bit
+and 256-bit floors follow the 112-bit security level of NIST SP 800-57 Part 1 and SP 800-131A [to verify]; MD5
+and SHA-1 have practical collision attacks (chosen-prefix collisions on SHA-1 were demonstrated in 2020
+[to verify]). A weak algorithm on a self-signed anchor is still reported: its own signature is not what gives it
+trust, but its key is.
 
-<!-- forge:domain -->
-- G. Kessler, *File Signatures Table* (garykessler.net) and the `file(1)` / libmagic database — practitioner
-  references for magic numbers (to be verified against the entries of [B4](#b4-type-detection-by-magic-bytes-and-extension-mismatch)).
-- Format specifications for the signatures used: ISO 32000-1 (PDF header), ISO/IEC 15948 (PNG), ITU-T T.81
-  (JPEG SOI marker), PKWARE APPNOTE (ZIP local file header), RFC 1952 (GZIP), ISO/IEC 14496-12 (`ftyp` box),
-  Microsoft PE/COFF specification (`MZ` DOS header).
-<!-- /forge:domain -->
+## B10 Purpose rules
 
-Independent oracles used to cross-check this tool: Python `hashlib`/`blake3` for
-[examples/sample/expected_hashes.csv](../examples/sample/expected_hashes.csv) and
-[tests/verify_chain.py](../tests/verify_chain.py) (both in CI); JSON Schemas via
-[tests/validate_reports.py](../tests/validate_reports.py) (in CI); pyHanko for signed PDFs
-([tests/validate_pdf_signature.py](../tests/validate_pdf_signature.py), in CI); OpenSSL for RFC 3161 tokens
-(manual, see above); the Python profile of this tool: a committed case folder it wrote
-([tests/golden/](../tests/golden/regenerate.py), in CI) and the live cross-profile test (case folders and item
-numbering, run when `RV_CROSS_PROJECT` is set).
+| `--purpose` | Checked by | Rule |
+| --- | --- | --- |
+| `any` (default) | — | No purpose check |
+| `tls-server`, `tls-client`, `code-signing`, `email`, `timestamping` | OpenSSL `X509_PURPOSE_SSL_SERVER`, `SSL_CLIENT`, `CODE_SIGN`, `SMIME_SIGN`, `TIMESTAMP_SIGN` (`openssl verify -purpose sslserver / sslclient / codesign / smimesign / timestampsign`) | OpenSSL's rules for the target (EKU and key usage, Netscape cert type) and for the CAs above it. `timestampsign` requires a critical EKU with timeStamping only |
+| `document-signing` | **The tool** (OpenSSL has no such purpose) | The target's EKU is absent or includes documentSigning (1.3.6.1.5.5.7.3.36, RFC 9336), emailProtection or anyExtendedKeyUsage, **and** its key usage is absent or includes digitalSignature or nonRepudiation. CAs are not checked for this purpose |
+
+A failed check gives `CERT_PURPOSE_MISMATCH` with the key usage and EKU found. The document-signing rule is
+deliberately permissive (RFC 9336 is recent and most signing certificates in the field carry emailProtection or
+no EKU); the verdict's notes state the rule whenever it fails. The Microsoft document-signing EKU
+(1.3.6.1.4.1.311.10.3.12) alone does **not** satisfy it.
+
+## B11 Name constraints
+
+OpenSSL decides name-constraint violations (RFC 5280 §4.2.1.10; codes 47–49, 51–53). To name the offending entry,
+the tool matches the target's SANs (and its CN as a DNS name when it has no DNS SAN, and emailAddress) against the
+permitted and excluded subtrees of each CA above it: DNS by suffix on a label boundary, e-mail by exact address,
+domain or `.domain`, IP by CIDR. The finding names the first name outside a constraint and the CA that imposed it.
+
+## B12 Private-key matching
+
+A private key item (or the key of an opened PKCS#12) is opened only long enough to compare its public half
+([keymatch.rs](../src/certs/src/analysis/keymatch.rs)): RSA by modulus and exponent, EC by curve and point,
+Ed25519/Ed448 by the raw public key, others by SubjectPublicKeyInfo. In `analyze`, core compares the SHA-256 of the
+key's SubjectPublicKeyInfo with that of every certificate of the run: a match anywhere →
+`KEY_MATCHES_CERTIFICATE`; otherwise, if a certificate was supplied with it (same item, or an item with the same
+file stem: `leaf.key` and `leaf.crt`) → `KEY_DOES_NOT_MATCH` (high); otherwise `KEY_NOT_PAIRED`. Only public facts
+reach any output; key bytes live in zeroized buffers.
+
+## B13 Rakvor internal certificates
+
+`CERT_ISSUED_BY_RAKVOR_INTERNAL` (info) is reported when a certificate's certificatePolicies contain an OID under
+Rakvor's arc `2.25.130074246409705057913773883974790544206` (a UUID OID under 2.25, ITU-T X.667; compared on the DER
+content octets, so every sub-arc matches), or when a path ends in the bundled Rakvor root
+(`packaging/signing/rakvor-code-signing-root.cer`, `--anchor rakvor`). Policy OIDs used: `.1.1` internal use (every
+certificate `pki` issues), `.9.1` lab certificates, `.9.2` the lab TSA policy. The user notice written in every
+issued certificate is: *"Rakvor internal use only. Not a firma digital under Ley 527 de 1999 art. 28 (Colombia); not
+a qualified certificate under eIDAS (EU 910/2014)."*
+
+## B14 Trust-list formats and snapshots
+
+**EU (ETSI TS 119 612).** The tool imports a national Trusted List or the List of Trusted Lists (LOTL) as XML
+([eu.rs](../src/certs/src/trustlist/eu.rs)), reading local names only (namespace prefixes ignored), with no DTD or
+external entity ever resolved: SchemeInformation (TSLSequenceNumber, SchemeTerritory, ListIssueDateTime,
+NextUpdate), each TSPName, and for each TSPService its ServiceTypeIdentifier, ServiceName (English preferred),
+every DigitalId/X509Certificate, ServiceStatus and StatusStartingTime, and every ServiceHistoryInstance. A LOTL
+holds pointers to national lists, not services: its snapshot has no services (v0.1 does not follow the pointers;
+import each national TL). **The list's XAdES signature is not verified in v0.1** (`signature_verified: false`).
+
+**Colombia (curated CSV).** ONAC publishes no machine-readable list of accredited *entidades de certificación
+digital* (ECD), so Rakvor keeps a CSV checked by hand against ONAC's published accreditations
+([co.rs](../src/certs/src/trustlist/co.rs); JSON Schema of one row:
+[schemas/trustlist-co.schema.json](../schemas/trustlist-co.schema.json)). RFC 4180, UTF-8 (optional BOM), header
+with exactly these nine columns, in any order:
+
+| Column | Content |
+| --- | --- |
+| `ecd_name` | The ECD (trust service provider) |
+| `service_name` | The service |
+| `service_type` | `CA/QC` (issues certificates for *firma digital*), `TSA` (*estampado cronológico*), or another short type |
+| `status` | `accredited` \| `suspended` \| `withdrawn` |
+| `status_from` | Start of that status: RFC 3339 or `YYYY-MM-DD` |
+| `status_until` | End of that status, same format; empty = still current |
+| `certificate_pem_or_b64` | One CA certificate: a quoted PEM block or base64 DER on one line; may be empty |
+| `source_url` | Where the accreditation was checked (ONAC page) |
+| `checked_utc` | When the curator checked the row (RFC 3339) |
+
+One row is one status period of one service (`ecd_name` + `service_name` + `service_type`); a service with several
+periods has one row per period, a service with several CA certificates one row per certificate. The snapshot's
+issue date is the latest `checked_utc`. There is no signature to verify; the CSV's SHA-256 is the record.
+
+**Snapshots.** Each import is stored as `<data>/trust-lists/<list>/<id>.json` with `<id>.json.sha256` beside it,
+id `<list>-<YYYYMMDDTHHMMSSZ>-<first 8 hex of the source SHA-256>`. The snapshot records the source (`file:`), the
+import time and the SHA-256 of the XML or CSV exactly as read. Loading a snapshot recomputes the JSON file's SHA-256
+and refuses one that no longer matches. Data folder: `%LOCALAPPDATA%\Rakvor\rv-certcheck` on Windows,
+`$XDG_DATA_HOME/rakvor/rv-certcheck` or `~/.local/share/rakvor/rv-certcheck` elsewhere; `RV_CERTCHECK_DATA`
+overrides it.
+
+**Use as anchors.** `--anchor tl:eu@ID` (or `@latest`) trusts **every certificate of every service** of the
+snapshot, whatever the service type and status. Membership is then looked up per node, by certificate SHA-256,
+else by subject + SKI; the service's status **at the validation instant** is taken from its history (periods
+closed by the next period's start). `CERT_IN_TRUST_LIST` names the list, snapshot, service and status at the
+date; `CERT_NOT_IN_TRUST_LIST` (low) is reported when no node is a service identity. **Read the status**: a chain
+to a withdrawn or a TSA service still validates against such an anchor, and `CERT_CHAIN_VALID` alone does not
+say the service was granted or of the right type.
+
+## B15 PKI creation
+
+**CA folder** (schema `rakvor.ca/1`):
+
+```text
+<CA>/ca.json                       CaFolder (rewritten only to advance next_crl_number)
+<CA>/issued.jsonl                  one hash-chained record per operation
+<CA>/certs/ca.crt                  the CA certificate (PEM); certs/<serial>.crt for every certificate issued
+<CA>/crl/<n>.crl, crl/latest.crl   every CRL (DER); latest.crl is a copy of the newest
+<CA>/ocsp/<serial>-<time>.der      every OCSP response signed (lab use)
+<CA>/keys/                         encrypted CA key (0600, directory 0700); a token key is only referenced
+```
+
+Every mutating operation takes the folder lock, re-verifies `issued.jsonl` and the SHA-256 of every file a record
+names, unlocks the CA key, checks that it is the key of `certs/ca.crt`, acts, verifies the result with OpenSSL
+(signature over the new certificate or CRL), and appends a record. A broken chain, a modified recorded file or a
+key that does not match stops the CA (exit 3, nothing issued).
+
+**Profiles** (`profile_extensions()` in pki.rs; every certificate also gets SKI, AKI = the CA's key id, the Rakvor
+internal policy with its user notice, and the CDP of `ca.json` `crl_url` when set):
+
+| Profile | basicConstraints | keyUsage (critical) | extendedKeyUsage | Library default key |
+| --- | --- | --- | --- | --- |
+| root (`pki init-root`) | CA:TRUE, no path length (critical) | keyCertSign, cRLSign | — | (given by the caller) |
+| `intermediate` | CA:TRUE, pathlen 0 (critical) | keyCertSign, cRLSign | — | p-384 |
+| `code-signing` | CA:FALSE (critical) | digitalSignature | codeSigning (not critical) | rsa-3072 |
+| `examiner` | CA:FALSE | digitalSignature, nonRepudiation | emailProtection, documentSigning (RFC 9336), Microsoft document signing 1.3.6.1.4.1.311.10.3.12 (not critical) | rsa-3072 |
+| `tsa` | CA:FALSE | digitalSignature | timeStamping (**critical**, RFC 3161 §2.3) | p-256 |
+| `tls-server` | CA:FALSE | digitalSignature (+ keyEncipherment for RSA) | serverAuth; at least one `dns:` or `ip:` SAN required | p-256 |
+| `client-internal` | — | — | — | **refused in v0.1** (needs the CP/CPS reviewed by counsel) |
+
+The CLI always passes a key type: `--key-type` defaults to **rsa-4096** for `pki init-root` and **rsa-3072** for
+`pki issue` and `csr new`, whatever the profile, so the library defaults of the last column apply only to other
+callers (the GUI or a script using the library). A new certificate's validity ends at the earlier of *now + validity days* and the CA's own notAfter; an expired CA
+cannot issue. The examiner profile always creates a new file key and also writes `<serial>.p12` (key, examiner
+certificate, issuing CA certificate) next to the key file. Signature algorithms follow the CA key: RSA →
+sha256WithRSAEncryption (PKCS#1 v1.5), P-256 → ecdsa-with-SHA256, P-384 → ecdsa-with-SHA384, Ed25519 → Ed25519.
+
+**Serials**: 16 octets from the OS CSPRNG (OpenSSL `RAND_bytes`), top bit cleared (positive INTEGER), first octet
+forced non-zero: 127 random bits, above the 64 bits the CA/Browser Forum Baseline Requirements ask for
+[to verify].
+
+**DER.** Certificates, CRLs, CSRs and OCSP responses are written by a small DER writer (X.690; `SET OF` sorted)
+rather than `rcgen`, because the profiles need an issuer copied byte for byte from an imported CA, a critical EKU,
+a user-notice policy qualifier and, for lab sets, MD5/SHA-1 signatures; every structure is parsed and verified by
+OpenSSL before it is written.
+
+**Key protection** ([keys.rs](../src/certs/src/create/keys.rs)):
+
+| Container | Parameters |
+| --- | --- |
+| Encrypted PKCS#8 (`ENCRYPTED PRIVATE KEY`, RFC 5958) | PBES2 (RFC 8018): PBKDF2-HMAC-SHA256, **600 000** iterations, 16-byte random salt; AES-256-CBC, 16-byte random IV. Readable by `openssl pkey` |
+| Examiner PKCS#12 (RFC 7292) | Key in a pkcs8ShroudedKeyBag with the same PBES2 parameters; certificates in a plain SafeContents (public data); integrity HMAC-SHA256 (RFC 7292 appendix B key derivation), 600 000 iterations, 16-byte salt |
+| Token keys (PKCS#11) | Generated on the token with CKA_TOKEN, CKA_PRIVATE, CKA_SENSITIVE true and CKA_EXTRACTABLE false; signing with CKM_RSA_PKCS over a DigestInfo, CKM_ECDSA over a digest (r‖s converted to DER), CKM_EDDSA. A root key on a token needs `--confirm-root`, and its label records `[root, --confirm-root]` |
+
+scrypt was not chosen: OpenSSL's PKCS#8 reader caps scrypt memory at 32 MiB. Files are created with `create_new`
+(never overwritten), 0600 on Unix; on Windows they inherit the profile's ACL (user, SYSTEM, Administrators). An
+unencrypted key file is refused as a CA key. Passwords and PINs are read from an environment variable or a prompt
+without echo, held in zeroized buffers and never logged.
+
+**OCSP signing** (`pki ocsp-sign`): a BasicOCSPResponse signed by the CA itself (responder by name, CA certificate
+embedded), CertID with SHA-1, status `revoked` if a revocation record dated at or before producedAt exists, `good`
+if the serial was issued, else `unknown`. There is no OCSP server.
+
+**`issued.jsonl`** ([issued.rs](../src/certs/src/create/issued.rs)): one record per operation (`ca_created`,
+`ca_imported`, `issued`, `revoked`, `crl_issued`, `ocsp_signed`) with serial, profile, subject, validity,
+certificate SHA-256, file and file SHA-256, reason, CRL number, key *location*, actor and tool version. Chained
+exactly like `audit.jsonl`:
+
+```text
+entry_hash      = SHA-256( canonical JSON of the record without entry_hash )
+canonical       = keys sorted, no whitespace, UTF-8
+prev_entry_hash = the previous record's entry_hash (64 zeros for the first); seq = 1, 2, 3 …
+```
+
+`ca.json` itself is not inside the chain: its `certificate_sha256` is cross-checked against the first record and
+the certificate file, but fields such as `crl_url` or `allowed_profiles` can be edited without breaking the chain.
+
+## B16 Lab sets and determinism
+
+`lab make --set full|minimal --seed N --base-time T` writes a set that is **byte-identical** for the same set,
+seed and base time ([lab.rs](../src/certs/src/create/lab.rs), [rng.rs](../src/certs/src/create/rng.rs)):
+
+- every random stream is ChaCha20 seeded with SHA-256(`rakvor.lab-set/1|<seed>|<label>`), one label per object,
+  so adding a case never changes the bytes of the others;
+- RSA keys are derived from those streams; RSA PKCS#1 v1.5 signatures are deterministic, so certificates, CRLs
+  and OCSP responses are too (lab CAs are RSA-2048, signed with SHA-256 except the weak-algorithm cases);
+- dates are offsets from the base time (default `2026-01-01T00:00:00Z`, never the wall clock), and every case is
+  judged **at the base time**; leaves are valid from 30 days before to 365 days after it unless the case changes
+  that;
+- `valid-chain/leaf.p12` uses the password `rakvor-lab` and seeded salts; `key-mismatch/leaf.key` is an
+  unencrypted test key. **Everything in a lab set is public by construction** and carries the lab policy
+  `.9.1`.
+
+The 13 cases of `full`: valid-chain, expired (30 days before), not-yet-valid (30 days after), revoked-by-crl
+(keyCompromise 7 days before), revoked-by-ocsp (known only from `leaf.ocsp`), wrong-root, rsa-1024, sha1-signed,
+md5-signed, bad-eku (codeSigning judged for tls-server), name-constraint-violation, broken-signature,
+key-mismatch. `minimal`: valid-chain, expired, revoked-by-crl, key-mismatch. `expected_findings.json`
+(`rakvor.lab-set/1`) lists for each case the validation settings, the codes `analyze` must and must not report,
+the `openssl verify` code expected with the same settings (0 for revoked-by-OCSP: `openssl verify` never reads
+OCSP), and the SHA-256 of every file.
+
+## B17 Audit chain, case folder, timestamp of the log
+
+These are shared with every Rakvor tool and described in [forensic-audit.md](forensic-audit.md) and
+[case-folder.md](case-folder.md):
+
+- `audit.jsonl`: one JSON entry per action, `entry_hash` = SHA-256 of the canonical entry, `prev_entry_hash` =
+  the previous one; `verify-log` and the independent Python verifier ([tests/verify_chain.py](../tests/verify_chain.py))
+  detect edited, deleted or reordered entries; truncation is detectable against the RFC 3161 timestamp of the
+  chain head or the case log.
+- `analyze` records the validation options (anchors with the SHA-256 of each anchor file and of each resolved
+  certificate, `--at`, `--purpose`, `--crl`/`--ocsp` files with SHA-256, `--online`, whether a PKCS#12 password was
+  supplied, the OpenSSL version), each item's certificate stage (`item_certificates_checked`), every online fetch,
+  and the SHA-256 of `chain.json` and `certificate.txt`.
+- Creation commands write a standalone run (`run_started`, `environment_recorded`, `file_written` with SHA-256,
+  `ca_log_appended` linking the `issued.jsonl` record and its `entry_hash`, `report_written`, `run_finished`).
+  They request no RFC 3161 timestamp; add one later with `rv-certcheck timestamp <LOG>`.
+- With `--case-dir`, RV CertCheck is an **analysis** tool: it re-hashes every item and compares it with the
+  registry written at intake.
+
+## B18 Oracles and validation status
+
+| Oracle | What it checks | Where |
+| --- | --- | --- |
+| OpenSSL CLI fixtures | Made only with the `openssl` command line ([tests/fixtures/make_with_openssl.sh](../tests/fixtures/make_with_openssl.sh)); `validate_chain` must give the same first code and success as `openssl verify` over fixtures × times × purposes × with/without CRL; `openssl crl`, `ocsp -respin`, `ts -verify` against the parsers and checks | [analysis_oracle_openssl.rs](../src/certs/tests/analysis_oracle_openssl.rs) |
+| Python `cryptography` | A second, non-OpenSSL path validator (no revocation); agreement rule in its docstring (it refuses SHA-1/MD5 signatures, which the tool reports as a finding) | [tests/oracle_chain.py](../tests/oracle_chain.py), [analysis_oracle_python.rs](../src/certs/tests/analysis_oracle_python.rs) |
+| Lab set | `lab make --set full --seed 1`: every case's expected and forbidden codes and `openssl verify` code | [analysis_oracle_lab.rs](../src/certs/tests/analysis_oracle_lab.rs) |
+| Sample | `examples/sample` (OpenSSL CLI) with `expected_findings.json` | [src/cli/tests/analyze_sample.rs](../src/cli/tests/analyze_sample.rs) |
+| Fuzzing | Hostile and truncated inputs never panic | [analysis_fuzz.rs](../src/certs/tests/analysis_fuzz.rs) |
+| PKCS#11 | SoftHSM2 tests, run only when `RV_TEST_PKCS11_MODULE`, `_SERIAL` and `_PIN` are set (the CI workflow does not install SoftHSM2 in this commit) | [acceptance_creation.rs](../src/certs/tests/acceptance_creation.rs), [create_lab_tokens.rs](../src/certs/tests/create_lab_tokens.rs) |
+
+**No error rate has been measured on a validated corpus** (limitation `NO_VALIDATED_ERROR_RATES_YET`, printed in
+every report). The oracles show agreement with OpenSSL and with an independent implementation on synthetic sets;
+they do not measure how often a verdict would be wrong on real-world material.
+
+## B19 References
+
+- RFC 5280, *Internet X.509 Public Key Infrastructure Certificate and CRL Profile* (2008): §4.2 extensions, §5 CRLs, §6 path validation.
+- RFC 6960, *X.509 Internet PKI Online Certificate Status Protocol — OCSP* (2013).
+- RFC 3161, *Time-Stamp Protocol (TSP)* (2001); RFC 5816, *ESSCertIDv2 Update for RFC 3161* (2010).
+- RFC 2634, *Enhanced Security Services for S/MIME* (1999); RFC 5035, *ESS Update: Adding CertID Algorithm Agility* (2007).
+- RFC 5652, *Cryptographic Message Syntax (CMS)* (2009).
+- RFC 2986, *PKCS #10* (2000); RFC 5958, *Asymmetric Key Packages* (2010); RFC 8018, *PKCS #5 v2.1* (2017); RFC 7292, *PKCS #12 v1.1* (2014).
+- RFC 9336, *X.509 Certificate General-Purpose Extended Key Usage (EKU) for Document Signing* (2022).
+- ITU-T X.667 / ISO/IEC 9834-8, UUID-based OIDs under 2.25; ITU-T X.690, DER.
+- ETSI TS 119 612, *Trusted Lists* (v2.x) [to verify: version used by the lists imported].
+- Regulation (EU) No 910/2014 (eIDAS), as amended by Regulation (EU) 2024/1183: art. 22 (trusted lists), arts. 28–29, Annex I (qualified certificates) [to verify: article numbers after the 2024 amendment].
+- Ley 527 de 1999 (Colombia), arts. 2, 28–30, 35–37 (project text, Función Pública EVA copy).
+- OpenSSL 3 manual pages `X509_verify_cert(3)`, `X509_VERIFY_PARAM_set_flags(3)`, `openssl-verify(1)`, `openssl-ts(1)`, `openssl-ocsp(1)`.
+- NIST SP 800-57 Part 1 Rev. 5 and SP 800-131A Rev. 2 (key-size transitions) [to verify].
