@@ -218,12 +218,11 @@ impl TokenSession {
             }
             Some(KeyType::EC) => {
                 let params = params.unwrap_or_default();
-                let point = unwrap_octet(&point.unwrap_or_default());
-                Ok(seq(&[seq(&[oid(OID_EC_PUBLIC_KEY), params]), bits(&point)]))
+                let alg = seq(&[oid(OID_EC_PUBLIC_KEY), params]);
+                first_valid_spki(&alg, &point.unwrap_or_default())
             }
             Some(KeyType::EC_EDWARDS) => {
-                let point = unwrap_octet(&point.unwrap_or_default());
-                Ok(seq(&[alg_absent(OID_ED25519), bits(&point)]))
+                first_valid_spki(&alg_absent(OID_ED25519), &point.unwrap_or_default())
             }
             other => Err(CertError::new(
                 ErrorKind::Unsupported,
@@ -412,6 +411,22 @@ impl TokenSession {
     }
 }
 
+/// CKA_EC_POINT is a DER OCTET STRING holding the point, but some modules return the raw point. Both readings are
+/// tried and the one OpenSSL accepts as a public key wins (a raw point can look like a DER header by chance).
+fn first_valid_spki(alg: &[u8], point: &[u8]) -> CertResult<Vec<u8>> {
+    let unwrapped = unwrap_octet(point);
+    for candidate in [&unwrapped[..], point] {
+        let spki = seq(&[alg.to_vec(), bits(candidate)]);
+        if openssl::pkey::PKey::public_key_from_der(&spki).is_ok() {
+            return Ok(spki);
+        }
+    }
+    Err(CertError::new(
+        ErrorKind::Token,
+        "the token's CKA_EC_POINT is not a valid public key",
+    ))
+}
+
 /// CKA_EC_POINT is a DER OCTET STRING holding the point (some modules return the raw point).
 fn unwrap_octet(v: &[u8]) -> Vec<u8> {
     if v.first() == Some(&0x04) && v.len() >= 2 {
@@ -440,4 +455,33 @@ pub fn generate_key(
         ));
     }
     open(module, token_serial, pin)?.generate(spec, label, confirm_root)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ec_points_raw_or_wrapped() {
+        let k = openssl::ec::EcKey::generate(
+            &openssl::ec::EcGroup::from_curve_name(openssl::nid::Nid::X9_62_PRIME256V1).unwrap(),
+        )
+        .unwrap();
+        let mut ctx = openssl::bn::BigNumContext::new().unwrap();
+        let raw = k
+            .public_key()
+            .to_bytes(
+                k.group(),
+                openssl::ec::PointConversionForm::UNCOMPRESSED,
+                &mut ctx,
+            )
+            .unwrap();
+        let alg = seq(&[oid(OID_EC_PUBLIC_KEY), oid(OID_P256)]);
+        let want = openssl::pkey::PKey::from_ec_key(k)
+            .unwrap()
+            .public_key_to_der()
+            .unwrap();
+        assert_eq!(first_valid_spki(&alg, &octet(&raw)).unwrap(), want);
+        assert_eq!(first_valid_spki(&alg, &raw).unwrap(), want);
+    }
 }

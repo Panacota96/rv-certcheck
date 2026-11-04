@@ -477,23 +477,27 @@ fn company_pki_flow_file_root() {
     let runs = every_run_log_verifies(dir);
     assert!(runs >= 14, "{runs} runs");
     no_secret_anywhere(dir, &[ROOT_PW, ISSUING_PW, LEAF_PW, P12_PW]);
-    // A report per successful run, with the internal-use notice.
+    // Every pki report carries the internal-use notice (directory order is arbitrary: check them all).
     let reports = dir.join("rakvor-out").join("reports");
-    let any = std::fs::read_dir(&reports)
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
-    let rep: Value =
-        serde_json::from_slice(&std::fs::read(any.join("report.json")).unwrap()).unwrap();
-    assert!(
-        rep["notice"]
+    let mut pki_reports = 0;
+    for e in std::fs::read_dir(&reports).unwrap() {
+        let rep: Value =
+            serde_json::from_slice(&std::fs::read(e.unwrap().path().join("report.json")).unwrap())
+                .unwrap();
+        if rep["command"]
             .as_str()
             .unwrap_or_default()
-            .contains("firma digital")
-            || rep["command"] == "csr new"
-    );
+            .starts_with("pki ")
+        {
+            pki_reports += 1;
+            let notice = rep["notice"].as_str().unwrap_or_default();
+            assert!(
+                notice.contains("firma digital") && notice.contains("rv-certcheck#2"),
+                "{rep}"
+            );
+        }
+    }
+    assert!(pki_reports >= 9, "{pki_reports} pki reports");
 
     // Tampering with issued.jsonl stops the CA: pki verify exits 3, nothing more is issued.
     let log = dir.join("issuing").join("issued.jsonl");
