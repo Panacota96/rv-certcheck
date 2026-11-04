@@ -287,6 +287,12 @@ fn spki_facts(spki_der: &[u8], alg_oid: &str) -> KeyInfo {
     }
 }
 
+/// Dotted text of an x509-parser OID from its DER content octets. x509-parser's `to_id_string()` cannot print
+/// arcs wider than 64 bits (the Rakvor `2.25.<UUID>` arc) and falls back to hex; this decoder takes 128-bit arcs.
+pub(crate) fn oid_s(o: &x509_parser::der_parser::oid::Oid<'_>) -> String {
+    oid_text(o.as_bytes()).unwrap_or_else(|| o.to_id_string())
+}
+
 pub(crate) fn gn(g: &XGn<'_>) -> GeneralName {
     let (kind, value) = match g {
         XGn::DNSName(s) => ("dns", s.to_string()),
@@ -294,8 +300,8 @@ pub(crate) fn gn(g: &XGn<'_>) -> GeneralName {
         XGn::URI(s) => ("uri", s.to_string()),
         XGn::IPAddress(b) => ("ip", ip_text(b)),
         XGn::DirectoryName(n) => ("dir", name_der_string(n.as_raw())),
-        XGn::OtherName(oid, _) => ("other", format!("otherName:{}", oid.to_id_string())),
-        XGn::RegisteredID(oid) => ("other", format!("registeredID:{}", oid.to_id_string())),
+        XGn::OtherName(oid, _) => ("other", format!("otherName:{}", oid_s(&oid))),
+        XGn::RegisteredID(oid) => ("other", format!("registeredID:{}", oid_s(&oid))),
         XGn::X400Address(_) => ("other", "x400Address".into()),
         XGn::EDIPartyName(_) => ("other", "ediPartyName".into()),
         XGn::Invalid(_, b) => ("other", format!("invalid:{}", hex(b))),
@@ -361,7 +367,7 @@ fn eku_names(e: &x509_parser::extensions::ExtendedKeyUsage<'_>) -> Vec<String> {
         }
     }
     for o in &e.other {
-        let id = o.to_id_string();
+        let id = oid_s(&o);
         v.push(if id == OID_DOCUMENT_SIGNING {
             "documentSigning".into()
         } else {
@@ -412,17 +418,13 @@ pub fn cert_info(der: &[u8]) -> CertResult<CertInfo> {
         ..Default::default()
     };
     if let Ok((_, xp)) = x509_parser::certificate::X509Certificate::from_der(&der) {
-        c.signature_algorithm_oid = xp.signature_algorithm.algorithm.to_id_string();
+        c.signature_algorithm_oid = oid_s(&xp.signature_algorithm.algorithm);
         c.key = spki_facts(
             xp.tbs_certificate.subject_pki.raw,
-            &xp.tbs_certificate
-                .subject_pki
-                .algorithm
-                .algorithm
-                .to_id_string(),
+            &oid_s(&xp.tbs_certificate.subject_pki.algorithm.algorithm),
         );
         for ext in xp.extensions() {
-            let oid = ext.oid.to_id_string();
+            let oid = oid_s(&ext.oid);
             c.extensions.push(ExtensionInfo {
                 name: oid_short_name(&oid),
                 oid,
@@ -463,14 +465,14 @@ pub fn cert_info(der: &[u8]) -> CertResult<CertInfo> {
                     });
                 }
                 ParsedExtension::CertificatePolicies(ps) => {
-                    c.policy_oids = ps.iter().map(|p| p.policy_id.to_id_string()).collect()
+                    c.policy_oids = ps.iter().map(|p| oid_s(&p.policy_id)).collect()
                 }
                 ParsedExtension::AuthorityInfoAccess(a) => {
                     for d in a.iter() {
                         let XGn::URI(u) = &d.access_location else {
                             continue;
                         };
-                        match d.access_method.to_id_string().as_str() {
+                        match oid_s(&d.access_method).as_str() {
                             "1.3.6.1.5.5.7.48.1" => c.aia_ocsp.push(u.to_string()),
                             "1.3.6.1.5.5.7.48.2" => c.aia_ca_issuers.push(u.to_string()),
                             _ => {}
@@ -542,12 +544,22 @@ pub(crate) fn weak_signature(c: &CertInfo) -> bool {
     })
 }
 
-pub(crate) fn rakvor_policy(c: &CertInfo) -> Option<&str> {
-    let arc = format!("{RAKVOR_OID_ARC}.");
-    c.policy_oids
-        .iter()
-        .find(|p| p.starts_with(&arc) || p.as_str() == RAKVOR_OID_ARC)
-        .map(String::as_str)
+/// The first certificatePolicies OID under the Rakvor arc, compared on the DER content octets (an OID equal to
+/// the arc, or one whose octets start with the arc's: every arc ends on an octet below 0x80, so a byte prefix is
+/// an arc prefix).
+pub(crate) fn rakvor_policy(c: &CertInfo) -> Option<String> {
+    let arc = oid_encode(RAKVOR_OID_ARC)?;
+    let (_, xp) = x509_parser::certificate::X509Certificate::from_der(&c.der).ok()?;
+    for ext in xp.extensions() {
+        if let ParsedExtension::CertificatePolicies(ps) = ext.parsed_extension() {
+            for p in ps {
+                if p.policy_id.as_bytes().starts_with(&arc) {
+                    return Some(oid_s(&p.policy_id));
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Parse-time signals of one certificate.
@@ -613,7 +625,7 @@ pub fn crl_info(der: &[u8]) -> CertResult<CrlInfo> {
     };
     let (_, xp) = x509_parser::revocation_list::CertificateRevocationList::from_der(&der)
         .map_err(|e| parse_err("CRL", e))?;
-    info.signature_algorithm = oid_long_name(&xp.signature_algorithm.algorithm.to_id_string());
+    info.signature_algorithm = oid_long_name(&oid_s(&xp.signature_algorithm.algorithm));
     info.crl_number = xp.crl_number().map(|n| n.to_string());
     for ext in xp.extensions() {
         if let ParsedExtension::AuthorityKeyIdentifier(a) = ext.parsed_extension() {
@@ -655,15 +667,15 @@ pub fn csr_info(der: &[u8]) -> CertResult<CsrInfo> {
         let cri = &xp.certification_request_info;
         info.key = spki_facts(
             cri.subject_pki.raw,
-            &cri.subject_pki.algorithm.algorithm.to_id_string(),
+            &oid_s(&cri.subject_pki.algorithm.algorithm),
         );
-        info.signature_algorithm = oid_long_name(&xp.signature_algorithm.algorithm.to_id_string());
+        info.signature_algorithm = oid_long_name(&oid_s(&xp.signature_algorithm.algorithm));
         for attr in cri.attributes() {
             if let x509_parser::cri_attributes::ParsedCriAttribute::ExtensionRequest(er) =
                 attr.parsed_attribute()
             {
                 for ext in &er.extensions {
-                    let oid = ext.oid.to_id_string();
+                    let oid = oid_s(&ext.oid);
                     info.requested_extensions.push(ExtensionInfo {
                         name: oid_short_name(&oid),
                         oid,

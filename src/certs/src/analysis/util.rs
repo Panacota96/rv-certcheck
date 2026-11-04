@@ -237,6 +237,29 @@ pub fn oid_text(content: &[u8]) -> Option<String> {
     )
 }
 
+/// DER content octets of a dotted OID (arcs up to 128 bits). None for malformed text.
+pub fn oid_encode(text: &str) -> Option<Vec<u8>> {
+    let arcs: Vec<u128> = text
+        .split('.')
+        .map(|a| a.parse::<u128>().ok())
+        .collect::<Option<_>>()?;
+    if arcs.len() < 2 || arcs[0] > 2 || (arcs[0] < 2 && arcs[1] >= 40) {
+        return None;
+    }
+    let mut out = vec![];
+    let first = arcs[0].checked_mul(40)?.checked_add(arcs[1])?;
+    for v in std::iter::once(first).chain(arcs[2..].iter().copied()) {
+        let mut groups = vec![(v & 0x7f) as u8];
+        let mut x = v >> 7;
+        while x > 0 {
+            groups.push(((x & 0x7f) as u8) | 0x80);
+            x >>= 7;
+        }
+        out.extend(groups.iter().rev());
+    }
+    Some(out)
+}
+
 /// `20261103101500Z` / `20261103101500.123Z` (GeneralizedTime content) → RFC 3339, fractions dropped. Lenient on
 /// purpose (as the template's TSTInfo parser in core/trust.rs): many TSAs send fractional seconds.
 pub fn generalized_time(content: &[u8]) -> Option<String> {
@@ -360,6 +383,12 @@ mod tests {
             "1.2.840.113549"
         );
         assert!(oid_text(&[0x86]).is_none());
+        let arc = oid_encode(RAKVOR_OID_ARC).unwrap();
+        assert_eq!(oid_text(&arc).unwrap(), RAKVOR_OID_ARC);
+        assert_eq!(
+            oid_encode("1.2.840.113549").unwrap(),
+            [0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d]
+        );
         assert_eq!(
             generalized_time(b"20261020182422.123Z").unwrap(),
             "2026-10-20T18:24:22Z"
