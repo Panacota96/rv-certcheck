@@ -371,7 +371,9 @@ impl TokenSession {
         ];
         let (mech, mut pub_t) = match spec {
             KeySpec::Rsa2048 | KeySpec::Rsa3072 | KeySpec::Rsa4096 => {
-                let bits: u64 = match spec {
+                // CK_ULONG is 32 bits on Windows and 64 on Linux: Ulong only converts from the platform's own
+                // CK_ULONG or, portably, through TryFrom<usize> (2048..4096 always fits).
+                let bits: usize = match spec {
                     KeySpec::Rsa2048 => 2048,
                     KeySpec::Rsa3072 => 3072,
                     _ => 4096,
@@ -379,7 +381,9 @@ impl TokenSession {
                 (
                     Mechanism::RsaPkcsKeyPairGen,
                     vec![
-                        Attribute::ModulusBits(bits.into()),
+                        Attribute::ModulusBits(
+                            cryptoki::types::Ulong::try_from(bits).expect("RSA size fits CK_ULONG"),
+                        ),
                         Attribute::PublicExponent(vec![0x01, 0x00, 0x01]),
                     ],
                 )
