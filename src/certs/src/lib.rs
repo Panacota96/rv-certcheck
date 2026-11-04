@@ -385,8 +385,6 @@ mod tests {
         assert!(ni(verify_timestamp_token(b"", None, &req, &opts)));
         assert!(ni(match_key(b"", None, b"")));
         assert!(ni(trust_list::list(d)));
-        assert!(ni(pki::open(d)));
-        assert!(ni(csr::show(b"")));
-        assert!(ni(tokens::list(d)));
+        // Agent B's lines (pki::open, csr::show, tokens::list) were removed: implemented.
     }
 }
