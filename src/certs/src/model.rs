@@ -763,7 +763,8 @@ pub struct ValidationOptions {
     pub crl_files: Vec<PathBuf>,
     /// `--ocsp` files (DER OCSP responses). Read by core, passed as [`ChainRequest::ocsp`].
     pub ocsp_files: Vec<PathBuf>,
-    /// Fetch CRLs/OCSP from AIA/CDP URLs (audited). v0.1: refused by core and CLI until agent A implements it.
+    /// Fetch CRLs/OCSP from the CDP / AIA URLs of every certificate of the built path (HTTP/HTTPS, 15 s timeout,
+    /// no cache); every fetch is in [`ChainVerdict::online_fetches`] and audited by core.
     pub online: bool,
     /// Folder of stored trust-list snapshots (the tool's data folder); None = the default data folder.
     pub trust_list_dir: Option<PathBuf>,

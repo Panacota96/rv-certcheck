@@ -10,8 +10,10 @@
 //!                                   ─► findings + items/<NNNNN-name>/chain.json and certificate.txt (hashed, audited)
 //! ```
 //!
-//! A certificate-layer stub (`ErrorKind::NotImplemented`) becomes the info finding `ANALYSIS_NOT_IMPLEMENTED`
-//! with the operation's name, so a development build still produces complete, honest reports.
+//! A certificate-layer call that fails becomes the medium finding `ANALYSIS_STEP_FAILED` with the operation and
+//! the reason (the layer has no stubs any more; `ANALYSIS_NOT_IMPLEMENTED` stays in the catalogue, unused).
+//! `--online`: every URL the layer fetched (CRL distribution points, OCSP responders) is listed with its
+//! response SHA-256 and time in the item's audit entry (`online_fetches`) and in chain.json.
 
 use crate::analyzer::{Analysis, Finding, Severity, analyze};
 use crate::hash::{HashAlgo, hash_bytes};
@@ -48,11 +50,8 @@ pub struct Prepared {
     pub ocsp: Vec<LabeledDer>,
 }
 
-/// Refuses what v0.1 cannot do yet. `--online` is implemented by agent A (audited URL fetching).
-pub fn check_options(opts: &CertOptions) -> Result<(), String> {
-    if opts.validation.online {
-        return Err("--online is not available in this build: revocation is checked offline only. Supply the CA's CRL with --crl FILE or an OCSP response with --ocsp FILE.".into());
-    }
+/// Checks the certificate options before a run. Everything is supported; `--online` fetches are audited.
+pub fn check_options(_opts: &CertOptions) -> Result<(), String> {
     Ok(())
 }
 
@@ -163,17 +162,15 @@ fn push_unique(findings: &mut Vec<Finding>, f: Finding) {
     }
 }
 
-/// A failed call → ANALYSIS_NOT_IMPLEMENTED (stub) or ANALYSIS_STEP_FAILED, and an entry in chain.json.
+/// A failed call → ANALYSIS_STEP_FAILED, and an entry in chain.json.
 fn failed(scan: &mut ItemScan, findings: &mut Vec<Finding>, operation: &str, e: &CertError) {
     scan.errors.push((operation.to_string(), e.message.clone()));
-    let f = if e.is_not_implemented() {
-        Finding::new(codes::ANALYSIS_NOT_IMPLEMENTED, Severity::Info).with("operation", operation)
-    } else {
+    push_unique(
+        findings,
         Finding::new(codes::ANALYSIS_STEP_FAILED, Severity::Medium)
             .with("operation", operation)
-            .with("error", e.message.clone())
-    };
-    push_unique(findings, f);
+            .with("error", e.message.clone()),
+    );
 }
 
 /// Per-item stage. `expected` = the first-pass digest the second read must reproduce.
@@ -430,6 +427,14 @@ pub fn cross_item_stage(
             }
         }
         let codes: Vec<&str> = it.findings.iter().map(|f| f.code.as_str()).collect();
+        // --online: every URL fetched for this item (its chains and its timestamp's TSA chain).
+        let mut fetches: Vec<&certs::OnlineFetch> =
+            verdicts.iter().flat_map(|v| &v.online_fetches).collect();
+        let ts_fetches: Vec<certs::OnlineFetch> = timestamp
+            .pointer("/signer_chain/online_fetches")
+            .and_then(|f| serde_json::from_value(f.clone()).ok())
+            .unwrap_or_default();
+        fetches.extend(ts_fetches.iter());
         let chain = json!({
             "schema": SCHEMA_CHAIN,
             "item": it.index,
@@ -457,6 +462,7 @@ pub fn cross_item_stage(
             "verdicts": verdicts.iter().map(|v| json!({"status": v.status, "openssl_code": v.openssl_code, "openssl_reason": v.openssl_reason, "depths": v.nodes.len()})).collect::<Vec<_>>(),
             "errors": it.scan.errors.iter().map(|(o, _)| o).collect::<Vec<_>>(),
             "codes": codes,
+            "online_fetches": fetches,
         });
         out.push(StageOutput { files, details });
     }
@@ -550,15 +556,16 @@ mod tests {
     }
 
     #[test]
-    fn online_is_refused_for_now() {
+    fn online_is_accepted_and_recorded() {
         let mut o = CertOptions::default();
         o.validation.online = true;
-        assert!(check_options(&o).unwrap_err().contains("--online"));
-        assert!(prepare(&o).is_err());
+        assert!(check_options(&o).is_ok());
+        let (_, audit) = prepare(&o).unwrap();
+        assert_eq!(audit["online"], true);
     }
 
     #[test]
-    fn stubs_become_not_implemented_findings() {
+    fn unparsable_crypto_items_are_reported_not_skipped() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("leaf.crt");
         std::fs::write(
@@ -577,15 +584,19 @@ mod tests {
             &CertOptions::default(),
         );
         assert_eq!(scan.rehash["matches_first_pass"], true);
-        if certs::sniff(&data).is_err_and(|e| e.is_not_implemented()) {
-            assert!(scan.crypto);
-            assert!(
-                a.findings
-                    .iter()
-                    .any(|f| f.code == codes::ANALYSIS_NOT_IMPLEMENTED
-                        && f.params["operation"] == "sniff")
-            );
-        }
+        assert!(scan.crypto);
+        assert!(
+            a.findings
+                .iter()
+                .any(|f| f.code == codes::CRYPTO_INPUT_UNPARSABLE),
+            "{:?}",
+            a.findings
+        );
+        assert!(
+            !a.findings
+                .iter()
+                .any(|f| f.code == codes::ANALYSIS_NOT_IMPLEMENTED)
+        );
     }
 
     #[test]

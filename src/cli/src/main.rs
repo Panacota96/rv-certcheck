@@ -71,7 +71,7 @@ EXIT CODES:
   1    Runtime error (input not found, output not writable, case log locked, ...).
        See the audit log.
   2    Usage error (unknown option, more than two hash algorithms, unsupported language, bad
-       --anchor/--at/--purpose value, --online in this build).
+       --anchor/--at/--purpose value).
        With --case-dir: folder of another case or schema, --case missing when creating the
        case, unknown evidence id.
   3    Completed with at least one high-severity finding (e.g. untrusted or invalid chain, revoked
@@ -454,8 +454,9 @@ struct AnalyzeArgs {
     #[arg(long = "ocsp", value_name = "FILE", verbatim_doc_comment)]
     ocsps: Vec<PathBuf>,
 
-    /// Fetch CRLs and OCSP responses from the URLs in the certificates (every URL, response hash and
-    /// time is audited). Not available in this build: supply --crl / --ocsp files instead.
+    /// Fetch CRLs and OCSP responses from the CRL distribution points and AIA OCSP URLs of every
+    /// certificate of each built path (HTTP/HTTPS, 15 s timeout, no cache). Every URL, response SHA-256
+    /// and time is audited (revocation_fetched) and listed in chain.json.
     /// Default: off (offline)
     /// Example: --online
     #[arg(long, verbatim_doc_comment)]
@@ -520,11 +521,6 @@ fn usage_error(msg: &str) -> u8 {
 }
 
 fn analyze(a: AnalyzeArgs) -> u8 {
-    if a.online {
-        return usage_error(
-            "--online is not available in this build: revocation is checked offline only. Supply the CA's CRL with --crl FILE or an OCSP response with --ocsp FILE.",
-        );
-    }
     for f in a.crls.iter().chain(&a.ocsps) {
         if !f.is_file() {
             return usage_error(&format!("no such file: {}", f.display()));

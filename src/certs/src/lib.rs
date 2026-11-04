@@ -14,8 +14,8 @@
 //! ```
 //!
 //! FROZEN API: the signatures in this file do not change (arguments are request structs from `model.rs`, which may
-//! gain defaulted fields). Each function below is a thin facade over the owning agent's module; every stub returns
-//! `CertError { kind: NotImplemented, message: "not implemented: <operation>" }` until implemented.
+//! gain defaulted fields). Each function below is a thin facade over the owning agent's module (all implemented; no
+//! facade returns `ErrorKind::NotImplemented` any more).
 //!
 //! FILE OWNERSHIP (two agents work in parallel and never edit the same file):
 //! ```text

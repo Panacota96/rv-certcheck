@@ -1,5 +1,5 @@
-//! Acceptance tests for agent A (analysis). Architect-owned: make them pass, do not weaken them. Each test skips,
-//! with a message, while the function it exercises is still a stub (ErrorKind::NotImplemented).
+//! Acceptance tests for agent A (analysis). Architect-owned: make them pass, do not weaken them. Each test fails
+//! if the function it exercises still answers ErrorKind::NotImplemented (both sides are implemented).
 //!
 //! Oracle: tests/fixtures/openssl, made by tests/fixtures/make_with_openssl.sh with the OpenSSL CLI only, and
 //! openssl-verify.tsv, which records `openssl verify -attime 2026-06-01 -CAfile root.crt -untrusted
@@ -32,8 +32,7 @@ macro_rules! or_skip {
     ($e:expr, $what:expr) => {
         match $e {
             Err(e) if e.is_not_implemented() => {
-                eprintln!("skipping: {} is not implemented yet", $what);
-                return;
+                panic!("{} is still a stub: {}", $what, e);
             }
             r => r,
         }

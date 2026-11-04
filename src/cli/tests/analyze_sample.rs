@@ -1,6 +1,7 @@
 //! Acceptance test of the analysis (agent A, through core): `analyze` on examples/sample must report the findings
-//! listed in examples/sample/expected_findings.json (made independently with the OpenSSL CLI). Skips, with a
-//! message, while the certificate layer still answers ANALYSIS_NOT_IMPLEMENTED. Architect-owned: do not weaken.
+//! listed in examples/sample/expected_findings.json (made independently with the OpenSSL CLI). Fails if the
+//! certificate layer answers ANALYSIS_NOT_IMPLEMENTED (both sides are implemented). Architect-owned: do not
+//! weaken. (Regenerate the file with RV_BLESS=1 python3 tests/bless_expected_findings.py BIN and review it.)
 
 use assert_cmd::Command;
 use serde_json::Value;
@@ -60,16 +61,14 @@ fn sample_findings_match_the_independent_expectations() {
             codes,
         );
     }
-    if codes_by_file
-        .values()
-        .flatten()
-        .any(|c| c == "ANALYSIS_NOT_IMPLEMENTED")
-    {
-        eprintln!(
-            "skipping: the certificate layer is not implemented yet (ANALYSIS_NOT_IMPLEMENTED)"
-        );
-        return;
-    }
+    // The certificate layer has no stub any more: a NotImplemented answer is a failure, not a skip.
+    assert!(
+        !codes_by_file
+            .values()
+            .flatten()
+            .any(|c| c == "ANALYSIS_NOT_IMPLEMENTED"),
+        "ANALYSIS_NOT_IMPLEMENTED in {codes_by_file:?}"
+    );
     let mut problems = vec![];
     for (file, want) in expected["items"].as_object().unwrap() {
         let got = codes_by_file.get(file).cloned().unwrap_or_default();

@@ -1,5 +1,5 @@
-//! Acceptance tests for agent B (creation). Architect-owned: make them pass, do not weaken them. Each test skips,
-//! with a message, while the function it exercises is still a stub (ErrorKind::NotImplemented).
+//! Acceptance tests for agent B (creation). Architect-owned: make them pass, do not weaken them. Each test fails
+//! if the function it exercises still answers ErrorKind::NotImplemented (both sides are implemented).
 //!
 //! Independent oracle: the OpenSSL command line (`openssl verify`, `openssl x509`, `openssl crl`), skipped when no
 //! `openssl` is on PATH. Lab-set conventions checked here: certificates and CRLs are PEM, OCSP responses DER;
@@ -14,8 +14,7 @@ macro_rules! or_skip {
     ($e:expr, $what:expr) => {
         match $e {
             Err(e) if e.is_not_implemented() => {
-                eprintln!("skipping: {} is not implemented yet", $what);
-                return;
+                panic!("{} is still a stub: {}", $what, e);
             }
             r => r,
         }

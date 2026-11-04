@@ -675,6 +675,14 @@ fn pipeline(
                 hashes,
             });
         }
+        for f in o.details["online_fetches"].as_array().into_iter().flatten() {
+            log.record(
+                "revocation_fetched",
+                Some(&path_s),
+                json!({"index": r.index, "fetch": f}),
+            )
+            .map_err(io)?;
+        }
         log.record(
             "item_certificates_checked",
             Some(&path_s),
@@ -1053,8 +1061,7 @@ mod tests {
         .unwrap();
         assert_eq!(s.items, 3);
         assert_eq!(s.medium, 1); // extension mismatch
-        // Duplicate pair, plus one certificate-layer info per item (ANALYSIS_NOT_IMPLEMENTED while it is a stub,
-        // CRYPTO_INPUT_NOT_RECOGNISED once sniffing is implemented).
+        // Duplicate pair, plus one certificate-layer info per item (CRYPTO_INPUT_NOT_RECOGNISED).
         assert_eq!(s.info, 5);
         assert!(crate::audit::verify(&s.log_dir.join("audit.jsonl")).is_ok());
         for f in ["audit.log", "hashes.csv", "environment.json"] {
@@ -1145,12 +1152,15 @@ mod tests {
     }
 
     #[test]
-    fn online_is_refused_and_audited() {
+    fn online_is_accepted_and_audited() {
         let out = tempfile::tempdir().unwrap();
-        let mut c = cfg(PathBuf::from("."), out.path().into());
+        let ev = tempfile::tempdir().unwrap();
+        std::fs::write(ev.path().join("a.txt"), "x").unwrap();
+        let mut c = cfg(ev.path().into(), out.path().into());
         c.cert.validation.online = true;
-        let e = run(&c, &mut |_| {}, &AtomicBool::new(false)).unwrap_err();
-        assert!(e.contains("--online"), "{e}");
+        let s = run(&c, &mut |_| {}, &AtomicBool::new(false)).unwrap();
+        let audit = std::fs::read_to_string(s.log_dir.join("audit.jsonl")).unwrap();
+        assert!(audit.contains("\"online\":true"), "{audit}");
     }
 
     fn sample_copy(dir: &Path) -> PathBuf {

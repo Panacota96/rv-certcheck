@@ -300,8 +300,8 @@ pub(crate) fn gn(g: &XGn<'_>) -> GeneralName {
         XGn::URI(s) => ("uri", s.to_string()),
         XGn::IPAddress(b) => ("ip", ip_text(b)),
         XGn::DirectoryName(n) => ("dir", name_der_string(n.as_raw())),
-        XGn::OtherName(oid, _) => ("other", format!("otherName:{}", oid_s(&oid))),
-        XGn::RegisteredID(oid) => ("other", format!("registeredID:{}", oid_s(&oid))),
+        XGn::OtherName(oid, _) => ("other", format!("otherName:{}", oid_s(oid))),
+        XGn::RegisteredID(oid) => ("other", format!("registeredID:{}", oid_s(oid))),
         XGn::X400Address(_) => ("other", "x400Address".into()),
         XGn::EDIPartyName(_) => ("other", "ediPartyName".into()),
         XGn::Invalid(_, b) => ("other", format!("invalid:{}", hex(b))),
@@ -367,7 +367,7 @@ fn eku_names(e: &x509_parser::extensions::ExtendedKeyUsage<'_>) -> Vec<String> {
         }
     }
     for o in &e.other {
-        let id = oid_s(&o);
+        let id = oid_s(o);
         v.push(if id == OID_DOCUMENT_SIGNING {
             "documentSigning".into()
         } else {
