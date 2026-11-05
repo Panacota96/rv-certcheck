@@ -276,8 +276,17 @@ item-report digest recorded before it, not the statistics report and `run_finish
 | `--no-timestamp` / `RV_NO_TIMESTAMP=1` / GUI unticked | No request | Use `rv-certcheck timestamp` later if needed |
 | Broken chain | `rv-certcheck timestamp` refuses (exit 3): no timestamp is added to a broken log | Investigate; do not repair |
 
-`verify-log` checks the token's digest and that it covers the logged head, **not** the TSA's signature and
-certificate (gap G18). Do that with OpenSSL (Git for Windows ships `openssl.exe`):
+`verify-log` checks the token's digest, that it covers the logged head and the TSA's CMS signature
+(`TSA signature valid (signer: …)`). The TSA certificate chain is validated only with `--tsa-ca`:
+
+```bash
+rv-certcheck verify-log <log folder> --tsa-ca <TSA roots.pem>
+# → … TSA signature valid (signer: …); chain validated to … (revocation not checked)
+# without --tsa-ca: … chain not checked (pass --tsa-ca <CA bundle> to validate it)
+```
+
+An unreadable bundle exits 1; a signature or chain failure exits 3. Revocation is never checked (gap G18): for
+that, and as an independent second check, use OpenSSL (Git for Windows ships `openssl.exe`):
 
 ```bash
 cd <log folder>

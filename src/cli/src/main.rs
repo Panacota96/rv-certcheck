@@ -158,6 +158,10 @@ CHECKS:
     breaks it;
   - every timestamp token (timestamp-<SEQ>.tsr) covers the hash of the entry it names, and every
     timestamp_obtained entry still has its token file;
+  - the TSA's CMS signature of every token: signer certificate in the token, ESS
+    signing-certificate binding, message digest over TSTInfo, RSA signature, timeStamping key
+    usage. With --tsa-ca, also the TSA certificate chain up to that CA bundle at the token's
+    genTime; without it the output says \"chain not checked\". Revocation is never checked;
   - truncation: a chain alone cannot show that entries were removed from its end. The log must
     still contain the entry covered by its RFC 3161 timestamp (covers_seq) and, for a run inside
     a case folder (<CASE>/runs/<TOOL>/<RUN-ID>/logs), end with the audit head that the case log
@@ -169,17 +173,26 @@ EXAMPLES:
   rv-certcheck verify-log rakvor-out/logs/20261019T101500Z-a1b2c3/audit.jsonl
   rv-certcheck verify-log rakvor-out/logs/20261019T101500Z-a1b2c3
   rv-certcheck verify-log E:\\CASE-014\\runs\\rv-certcheck\\20261019T101500Z-a1b2c3\\logs
+  rv-certcheck verify-log rakvor-out/logs/20261019T101500Z-a1b2c3 --tsa-ca digicert-tsa-roots.pem
 
 EXIT CODES:
   0  The chain is intact and agrees with its timestamps and case record (if any).
-  1  The log cannot be read.
+  1  The log or the --tsa-ca file cannot be read.
   3  The chain is broken (an entry was edited, deleted or re-ordered), a timestamp does not
-     match, or the log is shorter than its timestamp or case record says (truncated).")]
+     match or does not verify (altered token, invalid TSA signature, chain not trusted by
+     --tsa-ca), or the log is shorter than its timestamp or case record says (truncated).")]
     VerifyLog {
         /// Path to audit.jsonl, or to the run's log folder that contains it.
         ///
         /// Example: rakvor-out/logs/20261019T101500Z-a1b2c3
         log: PathBuf,
+        /// CA bundle (PEM with one or more certificates, or one DER certificate) that the TSA
+        /// certificate of every timestamp token must chain to, at the token's genTime.
+        ///
+        /// Default: none (the TSA signature is checked, the chain is not).
+        /// Example: --tsa-ca C:\certs\tsa-roots.pem
+        #[arg(long, value_name = "PEM", verbatim_doc_comment)]
+        tsa_ca: Option<PathBuf>,
     },
     /// Check every hash algorithm against known-answer test vectors.
     #[command(after_long_help = "\
@@ -222,7 +235,8 @@ CHECKS:
   - case-log.jsonl is an intact hash chain starting with case_created; case.json is unchanged;
   - evidence/registry.json has the SHA-256 recorded at the last registry change;
   - every run announced in the case log has an intact audit.jsonl (and valid timestamp
-    tokens), its case_linked entry points to its run_started entry, and the audit head
+    tokens: imprint and TSA signature; the TSA chain is not checked, use verify-log
+    --tsa-ca), its case_linked entry points to its run_started entry, and the audit head
     recorded at run_finished is its final entry (only timestamp_obtained may follow);
   - with --rehash: every registered item still reachable at its registered path is read again
     and its digests are compared with the registry (the latest registration of a path).
@@ -526,7 +540,7 @@ fn main() -> ExitCode {
         Command::Keys(c) => commands::keys(c),
         Command::Tokens(c) => commands::tokens(c),
         Command::TrustList(c) => commands::trust_list(c),
-        Command::VerifyLog { log } => verify_log(log),
+        Command::VerifyLog { log, tsa_ca } => verify_log(log, tsa_ca),
         Command::VerifyCase { case, rehash } => verify_case(case, rehash),
         Command::SelfTest => self_test(),
         Command::Timestamp {
@@ -829,13 +843,20 @@ fn timestamp(log: PathBuf, tsa_url: String, actor: Option<String>) -> u8 {
     }
 }
 
-fn verify_log(log: PathBuf) -> u8 {
+fn verify_log(log: PathBuf, tsa_ca: Option<PathBuf>) -> u8 {
     let path = if log.is_dir() {
         log.join("audit.jsonl")
     } else {
         log
     };
-    let v = match verify::verify_log(&path) {
+    let anchors = match tsa_ca.as_deref().map(trust::load_ca_bundle).transpose() {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            return EXIT_ERROR;
+        }
+    };
+    let v = match verify::verify_log_with(&path, anchors.as_deref()) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("error: {}", e);

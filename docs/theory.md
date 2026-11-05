@@ -679,6 +679,16 @@ These are shared with every Rakvor tool and described in [forensic-audit.md](for
   the previous one; `verify-log` and the independent Python verifier ([tests/verify_chain.py](../tests/verify_chain.py))
   detect edited, deleted or reordered entries; truncation is detectable against the RFC 3161 timestamp of the
   chain head or the case log.
+- The log's own RFC 3161 tokens (`timestamp-<N>.tsr`) are re-checked by `verify-log` and `verify-case` in the
+  pure-Rust core (`trust::verify_token`, the same code as RV Hub, rv-pdfauth and rv-imgauth; not the OpenSSL
+  analyzer of B8): the covered entry still exists, the token file has the recorded SHA-256, the imprint equals that
+  entry's hash, and the TSA's **CMS signature** verifies (content type `id-ct-TSTInfo`, one SignerInfo whose
+  certificate is in the token, message-digest over the TSTInfo, ESS signing-certificate v1/v2 binding that
+  certificate, RSA PKCS#1 v1.5 signature over the signed attributes, `timeStamping` extended key usage). Any failure
+  ("signature value does not verify") fails the log (exit 3). The **TSA certificate chain** is validated only by
+  `verify-log --tsa-ca <CA bundle>` (signatures, validity at `genTime`, CA flag up to a bundle certificate);
+  without it the output says "chain not checked". Revocation is never checked there; only RSA signers are
+  supported. To validate the TSA chain with revocation, analyze the `.tsr` with `rv-certcheck analyze` (B8).
 - `analyze` records the validation options (anchors with the SHA-256 of each anchor file and of each resolved
   certificate, `--at`, `--purpose`, `--crl`/`--ocsp` files with SHA-256, `--online`, whether a PKCS#12 password was
   supplied, the OpenSSL version), each item's certificate stage (`item_certificates_checked`), every online fetch,

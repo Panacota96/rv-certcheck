@@ -86,8 +86,18 @@ fn entries_count(n: u64) -> String {
     }
 }
 
-/// Verifies `path` (an audit.jsonl). Err only when the log cannot be opened.
+/// Verifies `path` (an audit.jsonl). Err only when the log cannot be opened. The TSA's CMS signature of
+/// every timestamp token is checked; its certificate chain is not (see [`verify_log_with`]).
 pub fn verify_log(path: &Path) -> Result<LogVerification, String> {
+    verify_log_with(path, None)
+}
+
+/// Like [`verify_log`]; with `tsa_anchors` (a CA bundle, `--tsa-ca`) the TSA certificate chain of every
+/// timestamp token is also validated up to one of them at the token's genTime (revocation is not checked).
+pub fn verify_log_with(
+    path: &Path,
+    tsa_anchors: Option<&[x509_cert::Certificate]>,
+) -> Result<LogVerification, String> {
     let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
     let mut v = LogVerification {
         path: path.to_path_buf(),
@@ -104,8 +114,8 @@ pub fn verify_log(path: &Path) -> Result<LogVerification, String> {
     let entries = read_entries(path);
     let n = v.entries;
     let heads = audit::heads(path);
-    v.problems
-        .extend(crate::trust::verify_timestamps(&dir, &heads));
+    let tokens = crate::trust::verify_timestamps_with(&dir, &heads, tsa_anchors);
+    v.problems.extend(tokens.problems);
 
     // Every timestamp the log says it obtained must still be next to it (deleting the token files is how a
     // truncation below the last timestamp would be hidden).
@@ -129,9 +139,10 @@ pub fn verify_log(path: &Path) -> Result<LogVerification, String> {
 
     // Anchors: (entry number, what vouches for it).
     let mut anchors: Vec<(u64, String)> = Vec::new();
+    let mut listed = Vec::new();
     for (name, m) in timestamp_metas(&dir) {
         let seq = m["covers_seq"].as_u64().unwrap_or(0);
-        v.timestamps.push(format!(
+        listed.push(format!(
             "timestamp {} by {} covers entry #{}",
             m["gen_time"].as_str().unwrap_or("?"),
             m["tsa"].as_str().unwrap_or("?"),
@@ -142,6 +153,12 @@ pub fn verify_log(path: &Path) -> Result<LogVerification, String> {
             anchors.push((seq, format!("the RFC 3161 timestamp ({})", name)));
         }
     }
+    // One line per token: with what its TSA signature and chain check established when every token verified.
+    v.timestamps = if tokens.tokens.len() == listed.len() {
+        tokens.tokens
+    } else {
+        listed
+    };
 
     if let Some(case) = case_of_log_dir(&dir) {
         case_anchor(&case, &entries, n, &mut v, &mut anchors);
