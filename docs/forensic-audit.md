@@ -100,7 +100,10 @@ sequenceDiagram
 - The TSA receives the chain head itself: the `entry_hash` of entry `#N` (already a SHA-256 digest) is the
   message imprint of the request (hash algorithm SHA-256); it is not hashed a second time.
 - `verify-log` checks each token: imprint = stored head, and entry `#N` still exists with that hash (a missing
-  entry `#N` is reported as truncation).
+  entry `#N` is reported as truncation), and the TSA's CMS signature (ESS signing-certificate, message digest,
+  RSA signature, `timeStamping` key usage); `verify-case` does the same for every run.
+- The TSA certificate chain is validated only with `verify-log --tsa-ca <CA bundle>` (at genTime); without it
+  the output says "chain not checked". Revocation is never checked.
 - Independent check: `openssl ts -verify -digest <head> -in timestamp-<N>.tsr -CAfile <TSA chain>`.
 - `--no-timestamp` (or `RV_NO_TIMESTAMP=1`) disables it; tests use a local TSA (`tests/fake_tsa.py`).
 - **Limitation:** a timestamp shows the log existed at that time; it does not prove that its content is true.

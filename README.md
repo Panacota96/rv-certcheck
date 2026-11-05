@@ -86,7 +86,8 @@ rv-certcheck analyze -i D:\evidence --anchor tl:eu@latest
 rv-certcheck analyze --case-dir E:\CASE-014 --anchor D:\roots\ca-root.pem
 rv-certcheck verify-case E:\CASE-014
 
-# Later: show that the run's log was not altered
+# Later: show that the run's log was not altered (also checks the TSA signature of its timestamp;
+# add --tsa-ca <TSA roots.pem> to validate the TSA certificate chain)
 rv-certcheck verify-log rakvor-out\logs\<RUN-ID>
 ```
 

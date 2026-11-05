@@ -396,16 +396,56 @@ fn trust_timestamp_signature_and_custody_with_test_pki() {
         .code(0)
         .stdout(predicate::str::contains("timestamp: ok"));
     let logs = only_dir(&out.path().join("logs"));
+    // The TSA's CMS signature is checked; the chain only with --tsa-ca.
     bin()
         .arg("verify-log")
         .arg(&logs)
         .assert()
         .code(0)
+        .stdout(predicate::str::contains("TSA signature valid"))
+        .stdout(predicate::str::contains("chain not checked"))
         .stdout(
             predicate::str::contains("covers entry").and(predicate::str::is_match(
                 r"truncation: entries up to #\d+ are anchored by the RFC 3161 timestamp \(timestamp-\d{5}\.json\); 3 entries after it \(timestamp_obtained, statistics_report_written, run_finished\) cannot be proven complete",
             ).unwrap()),
         );
+    bin()
+        .arg("verify-log")
+        .arg(&logs)
+        .arg("--tsa-ca")
+        .arg(pki.path().join("ca.pem"))
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains(
+            "chain validated to O=Rakvor TEST,CN=Rakvor TEST CA",
+        ))
+        .stdout(predicate::str::contains("chain not checked").not());
+    // Another CA does not vouch for this TSA.
+    let other = tempfile::tempdir().unwrap();
+    let made = std::process::Command::new(
+        std::env::var("RV_TEST_PYTHON").unwrap_or_else(|_| "python3".into()),
+    )
+    .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fake_tsa.py"))
+    .arg("certs")
+    .arg(other.path())
+    .status()
+    .unwrap();
+    assert!(made.success());
+    bin()
+        .arg("verify-log")
+        .arg(&logs)
+        .arg("--tsa-ca")
+        .arg(other.path().join("ca.pem"))
+        .assert()
+        .code(3)
+        .stdout(predicate::str::contains("chain not validated"));
+    bin()
+        .arg("verify-log")
+        .arg(&logs)
+        .arg("--tsa-ca")
+        .arg(other.path().join("missing.pem"))
+        .assert()
+        .code(1);
     let item = only_dir(&only_dir(&out.path().join("reports")).join("items"));
     for f in [
         "custody.json",
@@ -480,10 +520,28 @@ fn trust_timestamp_signature_and_custody_with_test_pki() {
         .find(|p| p.extension().is_some_and(|x| x == "tsr"))
         .unwrap();
     let mut b = std::fs::read(&tsr).unwrap();
+    // The last byte of a token is the last byte of the TSA's RSA signature value.
     let last = b.len() - 1;
     b[last] ^= 0xff;
-    std::fs::write(&tsr, b).unwrap();
-    bin().arg("verify-log").arg(&logs).assert().code(3);
+    std::fs::write(&tsr, &b).unwrap();
+    bin()
+        .arg("verify-log")
+        .arg(&logs)
+        .assert()
+        .code(3)
+        .stdout(predicate::str::contains("missing or altered"));
+    // Even with the recorded token digest updated to match, the signature check catches it.
+    let meta_path = tsr.with_extension("json");
+    let mut meta: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&meta_path).unwrap()).unwrap();
+    meta["token_sha256"] = rv_certcheck_core::hash::hash_bytes(&b, HashAlgo::Sha256).into();
+    std::fs::write(&meta_path, meta.to_string()).unwrap();
+    bin()
+        .arg("verify-log")
+        .arg(&logs)
+        .assert()
+        .code(3)
+        .stdout(predicate::str::contains("signature value does not verify"));
     // Offline run: pending, then added later with `timestamp`.
     let out2 = tempfile::tempdir().unwrap();
     bin()
@@ -924,6 +982,34 @@ fn golden_case_from_the_other_profile_verifies() {
             .stdout(predicate::str::contains("truncated: the case log records"));
         bin().arg("verify-case").arg(&case).assert().code(3);
         std::fs::write(&audit, &full).unwrap();
+        // verify-case checks each token's TSA signature too (its chain is not checked): an altered signature
+        // value, with the recorded token digest updated to match, makes the case fail.
+        let tsr = std::fs::read_dir(&logs)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find(|p| p.extension().is_some_and(|x| x == "tsr"))
+            .unwrap();
+        let meta_path = tsr.with_extension("json");
+        let (token, meta_text) = (
+            std::fs::read(&tsr).unwrap(),
+            std::fs::read_to_string(&meta_path).unwrap(),
+        );
+        let mut b = token.clone();
+        let last = b.len() - 1;
+        b[last] ^= 0xff;
+        std::fs::write(&tsr, &b).unwrap();
+        let mut meta: serde_json::Value = serde_json::from_str(&meta_text).unwrap();
+        meta["token_sha256"] = rv_certcheck_core::hash::hash_bytes(&b, HashAlgo::Sha256).into();
+        std::fs::write(&meta_path, meta.to_string()).unwrap();
+        bin()
+            .arg("verify-case")
+            .arg(&case)
+            .assert()
+            .code(3)
+            .stdout(predicate::str::contains("signature value does not verify"));
+        std::fs::write(&tsr, &token).unwrap();
+        std::fs::write(&meta_path, &meta_text).unwrap();
+        bin().arg("verify-case").arg(&case).assert().code(0);
         let reg = case.join("evidence/registry.json");
         let text = std::fs::read_to_string(&reg).unwrap();
         std::fs::write(&reg, text.replacen("\"size\": ", "\"size\": 1", 1)).unwrap();
