@@ -100,12 +100,22 @@ sequenceDiagram
 - The TSA receives the chain head itself: the `entry_hash` of entry `#N` (already a SHA-256 digest) is the
   message imprint of the request (hash algorithm SHA-256); it is not hashed a second time.
 - `verify-log` checks each token: imprint = stored head, and entry `#N` still exists with that hash (a missing
-  entry `#N` is reported as truncation).
-- Independent check: `openssl ts -verify -digest <head> -in timestamp-<N>.tsr -CAfile <TSA chain>`.
+  entry `#N` is reported as truncation), and the TSA's CMS signature (ESS signing-certificate, message digest,
+  RSA signature, critical `timeStamping`-only key usage); `verify-case` does the same for every run. The tokens
+  come from the log's `timestamp_obtained` entries: a recorded token whose `.tsr` or `.json` is missing is a
+  problem, never a skipped check.
+- The TSA certificate chain is validated only with `verify-log --tsa-ca <CA bundle>` (at genTime); without it
+  the output says "chain not checked". Revocation is never checked.
+- Independent signature/chain check: `openssl ts -verify -digest <head> -in timestamp-<N>.tsr -CAfile <TSA chain>`.
+  It does not check revocation (no CRL supplied, no OCSP query): establish the TSA certificate's revocation
+  status separately from CRL/OCSP evidence covering genTime (`rv-certcheck analyze --crl/--ocsp`, or `openssl
+  verify -crl_check -CRLfile <crl> -attime <genTime-epoch> …`).
 - `--no-timestamp` (or `RV_NO_TIMESTAMP=1`) disables it; tests use a local TSA (`tests/fake_tsa.py`).
 - **Limitation:** a timestamp shows the log existed at that time; it does not prove that its content is true.
 - This timestamp concerns the **audit log**. Timestamp tokens found among the evidence are verified separately by
   `analyze` ([theory.md B8](theory.md#b8-rfc-3161-tokens-and-ess-signing-certificate)).
+
+> **CRL dates and `-attime`.** OpenSSL applies `-attime` to the CRL as well, so `openssl verify -crl_check -attime <genTime-epoch>` only works with a CRL whose `thisUpdate`–`nextUpdate` interval contains genTime; a CRL issued after genTime fails with "CRL is not yet valid". To use a later CRL as evidence, check its signature (`openssl crl -in tsa-ca.crl -CAfile <TSA root.pem> -noout -verify`), then look up the TSA certificate's serial in it (`openssl crl -in tsa-ca.crl -noout -text`): absent, or listed with a revocation date after genTime, means not revoked at genTime. A CA may drop expired certificates from its CRLs, so for a TSA certificate that has since expired an absent serial is not conclusive: use a CRL from before its expiry, or an OCSP response archived at stamping time.
 
 ## Signed PDF reports
 

@@ -679,6 +679,29 @@ These are shared with every Rakvor tool and described in [forensic-audit.md](for
   the previous one; `verify-log` and the independent Python verifier ([tests/verify_chain.py](../tests/verify_chain.py))
   detect edited, deleted or reordered entries; truncation is detectable against the RFC 3161 timestamp of the
   chain head or the case log.
+- The log's own RFC 3161 tokens (`timestamp-<N>.tsr`) are re-checked by `verify-log` and `verify-case` in the
+  pure-Rust core (`trust::verify_token`, the same code as RV Hub, rv-pdfauth and rv-imgauth; not the OpenSSL
+  analyzer of B8), driven by the log's `timestamp_obtained` entries (a recorded token whose `.tsr` or `.json` is
+  missing, or whose metadata disagrees with the entry, is a problem — deleting the metadata file does not skip the
+  checks; a token file no entry records is checked too): the covered entry still exists, the token file has the
+  recorded SHA-256, the imprint equals that
+  entry's hash, and the TSA's **CMS signature** verifies (content type `id-ct-TSTInfo`, one SignerInfo whose
+  certificate is in the token, message-digest over the TSTInfo, ESS signing-certificate v1/v2 binding that
+  certificate, RSA PKCS#1 v1.5 signature over the signed attributes, and an extended key usage that is critical and only
+  `id-kp-timeStamping`, the same RFC 3161 §2.3 rule as `src/certs/src/analysis/timestamp.rs`). Any failure
+  ("signature value does not verify") fails the log (exit 3). The **TSA certificate chain** is validated only by
+  `verify-log --tsa-ca <CA bundle>`: every candidate issuer and anchor is tried (cross-signed intermediates,
+  renewed anchors, self-issued key-rollover intermediates; at most 8 deep, no loops), and a path is accepted only
+  if (an RFC 5280 subset, `trust::check_path`) every RSA signature verifies and every certificate is valid at
+  `genTime`; every intermediate has `cA=TRUE` (an anchor too, or is v1 / has keyCertSign); an issuer with keyUsage
+  has `keyCertSign`; no `pathLenConstraint` is exceeded (self-issued certificates not counted); directoryName name
+  constraints hold (other name forms are not evaluated: a path carrying such names under such a constraint is
+  rejected); and no certificate has an unsupported critical extension (policy processing is not implemented, so
+  critical policyConstraints, policyMappings and inhibitAnyPolicy fail closed). 34 fixture chains
+  (`tests/fixtures/tsa-chains`) pin these rules, each cross-checked with `openssl verify -purpose timestampsign`.
+  Without `--tsa-ca` the output says "chain not checked". Revocation is never checked there; only RSA signers are
+  supported. To check the TSA certificate's revocation, analyze the `.tsr` with `rv-certcheck analyze` and supply
+  CRL/OCSP evidence covering `genTime` (`--crl`, `--ocsp`; B8).
 - `analyze` records the validation options (anchors with the SHA-256 of each anchor file and of each resolved
   certificate, `--at`, `--purpose`, `--crl`/`--ocsp` files with SHA-256, `--online`, whether a PKCS#12 password was
   supplied, the OpenSSL version), each item's certificate stage (`item_certificates_checked`), every online fetch,

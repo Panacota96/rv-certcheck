@@ -12,7 +12,6 @@
 
 use crate::audit;
 use crate::case::{CASE_FILE, CASE_LOG, normalize};
-use crate::hash::{HashAlgo, hash_bytes};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -43,27 +42,6 @@ fn read_entries(path: &Path) -> Vec<Value> {
         .collect()
 }
 
-fn timestamp_metas(dir: &Path) -> Vec<(String, Value)> {
-    let mut metas: Vec<PathBuf> = std::fs::read_dir(dir)
-        .map(|d| d.filter_map(|e| e.ok()).map(|e| e.path()).collect())
-        .unwrap_or_default();
-    metas.retain(|p| {
-        p.file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.starts_with("timestamp-") && n.ends_with(".json"))
-    });
-    metas.sort();
-    metas
-        .into_iter()
-        .filter_map(|m| {
-            let v = std::fs::read_to_string(&m)
-                .ok()
-                .and_then(|t| serde_json::from_str::<Value>(&t).ok())?;
-            Some((m.file_name()?.to_string_lossy().into_owned(), v))
-        })
-        .collect()
-}
-
 /// `<CASE>` and the run folder name when `log_dir` is `<CASE>/runs/<tool>/<RUN-ID>/logs`.
 pub fn case_of_log_dir(log_dir: &Path) -> Option<PathBuf> {
     let abs = normalize(log_dir);
@@ -86,8 +64,18 @@ fn entries_count(n: u64) -> String {
     }
 }
 
-/// Verifies `path` (an audit.jsonl). Err only when the log cannot be opened.
+/// Verifies `path` (an audit.jsonl). Err only when the log cannot be opened. The TSA's CMS signature of
+/// every timestamp token is checked; its certificate chain is not (see [`verify_log_with`]).
 pub fn verify_log(path: &Path) -> Result<LogVerification, String> {
+    verify_log_with(path, None)
+}
+
+/// Like [`verify_log`]; with `tsa_anchors` (a CA bundle, `--tsa-ca`) the TSA certificate chain of every
+/// timestamp token is also validated up to one of them at the token's genTime (revocation is not checked).
+pub fn verify_log_with(
+    path: &Path,
+    tsa_anchors: Option<&[x509_cert::Certificate]>,
+) -> Result<LogVerification, String> {
     let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
     let mut v = LogVerification {
         path: path.to_path_buf(),
@@ -103,45 +91,29 @@ pub fn verify_log(path: &Path) -> Result<LogVerification, String> {
     }
     let entries = read_entries(path);
     let n = v.entries;
-    let heads = audit::heads(path);
-    v.problems
-        .extend(crate::trust::verify_timestamps(&dir, &heads));
+    let tokens = crate::trust::verify_timestamps_with(path, tsa_anchors);
+    v.problems.extend(tokens.problems);
 
-    // Every timestamp the log says it obtained must still be next to it (deleting the token files is how a
-    // truncation below the last timestamp would be hidden).
-    for e in entries
+    // Anchors: (entry number, what vouches for it). The tokens are driven by the log's timestamp_obtained
+    // entries (a recorded token whose .tsr or metadata is missing is a problem, never skipped); a covered entry
+    // beyond the log's end is reported by verify_timestamps_with ("truncated: … which is not in the log").
+    let mut anchors: Vec<(u64, String)> = tokens
+        .covers
         .iter()
-        .filter(|e| e["action"] == "timestamp_obtained")
-    {
-        let file = e["details"]["file"].as_str().unwrap_or_default();
-        let want = e["details"]["token_sha256"].as_str().unwrap_or_default();
-        let got = std::fs::read(dir.join(file))
-            .map(|b| hash_bytes(&b, HashAlgo::Sha256))
-            .unwrap_or_default();
-        if file.is_empty() || got != want {
-            v.problems.push(format!(
-                "entry #{} records timestamp token {}, which is missing or altered",
-                e["seq"],
-                if file.is_empty() { "?" } else { file }
-            ));
-        }
-    }
-
-    // Anchors: (entry number, what vouches for it).
-    let mut anchors: Vec<(u64, String)> = Vec::new();
-    for (name, m) in timestamp_metas(&dir) {
-        let seq = m["covers_seq"].as_u64().unwrap_or(0);
-        v.timestamps.push(format!(
-            "timestamp {} by {} covers entry #{}",
-            m["gen_time"].as_str().unwrap_or("?"),
-            m["tsa"].as_str().unwrap_or("?"),
-            m["covers_seq"]
-        ));
-        // seq > n is reported by verify_timestamps ("truncated: … which is not in the log").
-        if seq > 0 && seq <= n {
-            anchors.push((seq, format!("the RFC 3161 timestamp ({})", name)));
-        }
-    }
+        .filter(|(seq, _)| *seq <= n)
+        .map(|(seq, file)| {
+            (
+                *seq,
+                format!("the RFC 3161 timestamp ({})", file.replace(".tsr", ".json")),
+            )
+        })
+        .collect();
+    // One line per token: with what its TSA signature and chain check established when every token verified.
+    v.timestamps = if tokens.tokens.len() == tokens.listed.len() {
+        tokens.tokens
+    } else {
+        tokens.listed
+    };
 
     if let Some(case) = case_of_log_dir(&dir) {
         case_anchor(&case, &entries, n, &mut v, &mut anchors);

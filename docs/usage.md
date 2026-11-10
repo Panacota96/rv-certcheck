@@ -276,8 +276,19 @@ item-report digest recorded before it, not the statistics report and `run_finish
 | `--no-timestamp` / `RV_NO_TIMESTAMP=1` / GUI unticked | No request | Use `rv-certcheck timestamp` later if needed |
 | Broken chain | `rv-certcheck timestamp` refuses (exit 3): no timestamp is added to a broken log | Investigate; do not repair |
 
-`verify-log` checks the token's digest and that it covers the logged head, **not** the TSA's signature and
-certificate (gap G18). Do that with OpenSSL (Git for Windows ships `openssl.exe`):
+`verify-log` checks the token's digest, that it covers the logged head and the TSA's CMS signature
+(`TSA signature valid (signer: …)`). The TSA certificate chain is validated only with `--tsa-ca`:
+
+```bash
+rv-certcheck verify-log <log folder> --tsa-ca <TSA roots.pem>
+# → … TSA signature valid (signer: …); chain validated to … (revocation not checked)
+# without --tsa-ca: … chain not checked (pass --tsa-ca <CA bundle> to validate it)
+```
+
+An unreadable bundle exits 1; a signature or chain failure exits 3; a token the log records whose `.tsr` or
+`.json` is missing exits 3 too. Revocation is never checked (gap G18). As an independent **signature and chain**
+check, use OpenSSL (Git for Windows ships `openssl.exe`); it does not check revocation either (no CRL is supplied
+and OpenSSL does not query OCSP):
 
 ```bash
 cd <log folder>
@@ -287,13 +298,17 @@ openssl ts -reply -in timestamp-$N.tsr -text              # genTime, policy OID,
 openssl ts -reply -in timestamp-$N.tsr -token_out -out token.der
 openssl pkcs7 -inform DER -in token.der -print_certs > tsa-certs.pem   # certificates sent by the TSA
 openssl ts -verify -digest "$H" -in timestamp-$N.tsr -CAfile <TSA root.pem> -untrusted tsa-certs.pem
-# → "Verification: OK"
+# → "Verification: OK"  (signature and chain only, not revocation)
 ```
 
 Get the TSA root certificate from the TSA's own repository, not from the token. Record the output in the case file:
 it is the evidence that the TSA signed that head at that time. The same TSA chain can be checked with this tool:
 `rv-certcheck analyze -i timestamp-$N.tsr --anchor <TSA root.pem>` reports `TIMESTAMP_TOKEN_VALID` and the TSA chain
-at genTime.
+at genTime. Revocation must be established separately, from CRL/OCSP evidence that covers genTime (a CRL issued
+after genTime by the TSA's CA, or an OCSP response archived at stamping time): add `--crl <file>` / `--ocsp <file>`
+to that `analyze` run, or use `openssl verify -crl_check -CRLfile <crl> -attime <genTime-epoch> …`.
+
+> **CRL dates and `-attime`.** OpenSSL applies `-attime` to the CRL as well, so `openssl verify -crl_check -attime <genTime-epoch>` only works with a CRL whose `thisUpdate`–`nextUpdate` interval contains genTime; a CRL issued after genTime fails with "CRL is not yet valid". To use a later CRL as evidence, check its signature (`openssl crl -in tsa-ca.crl -CAfile <TSA root.pem> -noout -verify`), then look up the TSA certificate's serial in it (`openssl crl -in tsa-ca.crl -noout -text`): absent, or listed with a revocation date after genTime, means not revoked at genTime. A CA may drop expired certificates from its CRLs, so for a TSA certificate that has since expired an absent serial is not conclusive: use a CRL from before its expiry, or an OCSP response archived at stamping time.
 
 ## 7. Signing reports with the examiner certificate
 

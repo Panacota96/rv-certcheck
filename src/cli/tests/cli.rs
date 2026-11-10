@@ -367,6 +367,72 @@ fn usage_doc_matches_help() {
     );
 }
 
+/// Review (sidecar bypass): a copy of `logs` without its timestamp-*.json files. The audit log's
+/// timestamp_obtained entries still name the tokens, so the missing metadata is a problem and the tokens are
+/// still checked: with another CA bundle the chain is still refused.
+fn sidecar_deletion_is_detected(logs: &Path, good_ca: &Path, other_ca: &Path) {
+    let copy = tempfile::tempdir().unwrap();
+    for e in std::fs::read_dir(logs).unwrap() {
+        let p = e.unwrap().path();
+        let name = p.file_name().unwrap().to_string_lossy().into_owned();
+        if p.is_file() && !(name.starts_with("timestamp-") && name.ends_with(".json")) {
+            std::fs::copy(&p, copy.path().join(&name)).unwrap();
+        }
+    }
+    for ca in [good_ca, other_ca] {
+        bin()
+            .arg("verify-log")
+            .arg(copy.path())
+            .arg("--tsa-ca")
+            .arg(ca)
+            .assert()
+            .code(3)
+            .stdout(predicate::str::contains("metadata"));
+    }
+    bin()
+        .arg("verify-log")
+        .arg(copy.path())
+        .arg("--tsa-ca")
+        .arg(other_ca)
+        .assert()
+        .code(3)
+        .stdout(predicate::str::contains("chain not validated"));
+    bin().arg("verify-log").arg(copy.path()).assert().code(3);
+}
+
+/// The token checked from its metadata alone (log cut just before its timestamp_obtained entry, metadata digest
+/// updated to the altered token): the TSA signature check catches the alteration.
+fn altered_token_without_its_entry_fails_the_signature(
+    logs: &Path,
+    tsr: &Path,
+    meta: &serde_json::Value,
+) {
+    let cut = tempfile::tempdir().unwrap();
+    let covers = meta["covers_seq"].as_u64().unwrap();
+    let kept: String = std::fs::read_to_string(logs.join("audit.jsonl"))
+        .unwrap()
+        .lines()
+        .filter(|l| {
+            serde_json::from_str::<serde_json::Value>(l).unwrap()["seq"].as_u64() <= Some(covers)
+        })
+        .map(|l| format!("{l}\n"))
+        .collect();
+    std::fs::write(cut.path().join("audit.jsonl"), kept).unwrap();
+    std::fs::copy(tsr, cut.path().join(tsr.file_name().unwrap())).unwrap();
+    std::fs::write(
+        cut.path()
+            .join(tsr.with_extension("json").file_name().unwrap()),
+        meta.to_string(),
+    )
+    .unwrap();
+    bin()
+        .arg("verify-log")
+        .arg(cut.path())
+        .assert()
+        .code(3)
+        .stdout(predicate::str::contains("signature value does not verify"));
+}
+
 #[test]
 fn trust_timestamp_signature_and_custody_with_test_pki() {
     let pki = tempfile::tempdir().unwrap();
@@ -396,16 +462,61 @@ fn trust_timestamp_signature_and_custody_with_test_pki() {
         .code(0)
         .stdout(predicate::str::contains("timestamp: ok"));
     let logs = only_dir(&out.path().join("logs"));
+    // The TSA's CMS signature is checked; the chain only with --tsa-ca.
     bin()
         .arg("verify-log")
         .arg(&logs)
         .assert()
         .code(0)
+        .stdout(predicate::str::contains("TSA signature valid"))
+        .stdout(predicate::str::contains("chain not checked"))
         .stdout(
             predicate::str::contains("covers entry").and(predicate::str::is_match(
                 r"truncation: entries up to #\d+ are anchored by the RFC 3161 timestamp \(timestamp-\d{5}\.json\); 3 entries after it \(timestamp_obtained, statistics_report_written, run_finished\) cannot be proven complete",
             ).unwrap()),
         );
+    bin()
+        .arg("verify-log")
+        .arg(&logs)
+        .arg("--tsa-ca")
+        .arg(pki.path().join("ca.pem"))
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains(
+            "chain validated to O=Rakvor TEST,CN=Rakvor TEST CA",
+        ))
+        .stdout(predicate::str::contains("chain not checked").not());
+    // Another CA does not vouch for this TSA.
+    let other = tempfile::tempdir().unwrap();
+    let made = std::process::Command::new(
+        std::env::var("RV_TEST_PYTHON").unwrap_or_else(|_| "python3".into()),
+    )
+    .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fake_tsa.py"))
+    .arg("certs")
+    .arg(other.path())
+    .status()
+    .unwrap();
+    assert!(made.success());
+    bin()
+        .arg("verify-log")
+        .arg(&logs)
+        .arg("--tsa-ca")
+        .arg(other.path().join("ca.pem"))
+        .assert()
+        .code(3)
+        .stdout(predicate::str::contains("chain not validated"));
+    bin()
+        .arg("verify-log")
+        .arg(&logs)
+        .arg("--tsa-ca")
+        .arg(other.path().join("missing.pem"))
+        .assert()
+        .code(1);
+    sidecar_deletion_is_detected(
+        &logs,
+        &pki.path().join("ca.pem"),
+        &other.path().join("ca.pem"),
+    );
     let item = only_dir(&only_dir(&out.path().join("reports")).join("items"));
     for f in [
         "custody.json",
@@ -480,10 +591,30 @@ fn trust_timestamp_signature_and_custody_with_test_pki() {
         .find(|p| p.extension().is_some_and(|x| x == "tsr"))
         .unwrap();
     let mut b = std::fs::read(&tsr).unwrap();
+    // The last byte of a token is the last byte of the TSA's RSA signature value.
     let last = b.len() - 1;
     b[last] ^= 0xff;
-    std::fs::write(&tsr, b).unwrap();
-    bin().arg("verify-log").arg(&logs).assert().code(3);
+    std::fs::write(&tsr, &b).unwrap();
+    bin()
+        .arg("verify-log")
+        .arg(&logs)
+        .assert()
+        .code(3)
+        .stdout(predicate::str::contains("missing or altered"));
+    // Updating the digest in the metadata file does not help: the audit log's timestamp_obtained entry is what
+    // the token is checked against, and the metadata now disagrees with it.
+    let meta_path = tsr.with_extension("json");
+    let mut meta: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&meta_path).unwrap()).unwrap();
+    meta["token_sha256"] = rv_certcheck_core::hash::hash_bytes(&b, HashAlgo::Sha256).into();
+    std::fs::write(&meta_path, meta.to_string()).unwrap();
+    bin()
+        .arg("verify-log")
+        .arg(&logs)
+        .assert()
+        .code(3)
+        .stdout(predicate::str::contains("missing or altered"));
+    altered_token_without_its_entry_fails_the_signature(&logs, &tsr, &meta);
     // Offline run: pending, then added later with `timestamp`.
     let out2 = tempfile::tempdir().unwrap();
     bin()
@@ -924,6 +1055,42 @@ fn golden_case_from_the_other_profile_verifies() {
             .stdout(predicate::str::contains("truncated: the case log records"));
         bin().arg("verify-case").arg(&case).assert().code(3);
         std::fs::write(&audit, &full).unwrap();
+        // verify-case checks each token against its timestamp_obtained entry: an altered signature value, even
+        // with the digest in the metadata file updated to match, makes the case fail (the entry's digest differs).
+        let tsr = std::fs::read_dir(&logs)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find(|p| p.extension().is_some_and(|x| x == "tsr"))
+            .unwrap();
+        let meta_path = tsr.with_extension("json");
+        let (token, meta_text) = (
+            std::fs::read(&tsr).unwrap(),
+            std::fs::read_to_string(&meta_path).unwrap(),
+        );
+        let mut b = token.clone();
+        let last = b.len() - 1;
+        b[last] ^= 0xff;
+        std::fs::write(&tsr, &b).unwrap();
+        let mut meta: serde_json::Value = serde_json::from_str(&meta_text).unwrap();
+        meta["token_sha256"] = rv_certcheck_core::hash::hash_bytes(&b, HashAlgo::Sha256).into();
+        std::fs::write(&meta_path, meta.to_string()).unwrap();
+        bin()
+            .arg("verify-case")
+            .arg(&case)
+            .assert()
+            .code(3)
+            .stdout(predicate::str::contains("missing or altered"));
+        std::fs::write(&tsr, &token).unwrap();
+        // Review (sidecar bypass): deleting the metadata file does not skip the token's checks.
+        std::fs::remove_file(&meta_path).unwrap();
+        bin()
+            .arg("verify-case")
+            .arg(&case)
+            .assert()
+            .code(3)
+            .stdout(predicate::str::contains("metadata"));
+        std::fs::write(&meta_path, &meta_text).unwrap();
+        bin().arg("verify-case").arg(&case).assert().code(0);
         let reg = case.join("evidence/registry.json");
         let text = std::fs::read_to_string(&reg).unwrap();
         std::fs::write(&reg, text.replacen("\"size\": ", "\"size\": 1", 1)).unwrap();

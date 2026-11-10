@@ -413,8 +413,10 @@ quoted article text is [V]):
   individual entries were written (only the head is stamped); coverage of the entries written after the token (the
   statistics report and `run_finished`, [theory.md B8](theory.md#b17-audit-chain-case-folder-timestamp-of-the-log)).
 - **Consequence:** Rakvor carries the burden of showing the TSA's reliability: policy OID, clock source,
-  certificate chain and revocation at stamping time. `verify-log` does **not** check these (G18): run the OpenSSL
-  check in the [checklist](#examiner-checklist-before-filing-a-report).
+  certificate chain and revocation at stamping time. `verify-log` verifies the TSA's CMS signature on the token
+  and, only with `--tsa-ca <TSA roots>`, the certificate chain at genTime; it does **not** check revocation,
+  policy or accuracy (G18): run `verify-log --tsa-ca` and the OpenSSL check in the
+  [checklist](#examiner-checklist-before-filing-a-report).
 
 | # | Requirement | Source | How the tool meets it | Status |
 | --- | --- | --- | --- | --- |
@@ -618,7 +620,7 @@ Rakvor management.
 | G15 | Scope: no imaging, live, cloud or mobile acquisition | ISO-11 | Declared; use dedicated acquisition tools | — | Examiner |
 | G16 | No ANSSI PRIS qualification (market positioning, not admissibility) | §5.5 | — | Optional roadmap item | Firm |
 | G17 | Source access offered without a defined protocol; the Rakvor Source-Auditable Licence is a draft pending legal review | CO-P17, FR-P11, CO-C5 | Provide the exact tagged source on request | Standard NDA and inspection protocol (escrow or supervised review); finalise the licence | Firm + Counsel |
-| G18 | `verify-log` / `verify-case` check the token's imprint, status and file digest, but **not** the TSA signature, certificate chain, policy or accuracy | EU-4, CO-L9 | `openssl ts -verify` against the TSA chain (checklist step 9) | Verify the token signature and chain in `verify-log` | Eng. |
+| G18 | `verify-log` / `verify-case` check the token's imprint, status, file digest and TSA CMS signature; the TSA certificate chain only with `verify-log --tsa-ca`; **not** revocation, policy or accuracy | EU-4, CO-L9 | `verify-log --tsa-ca <TSA roots>`; revocation from CRL/OCSP evidence covering genTime (`rv-certcheck analyze --crl/--ocsp`, or `openssl verify -crl_check` with that CRL; `openssl ts -verify` alone does not check it) (checklist step 9) | Offline CRL/OCSP checking of the TSA certificate | Eng. |
 | G19 | No command re-verifies report files against the digests in the audit log | ISO-1, CO-P2 | Script in [usage.md](usage.md#8-verifying-a-run) | `verify-run` command | Eng. |
 | G20 | Truncation of a run's `audit.jsonl` (entries removed from the end) is detectable only against a record kept outside the log. `verify-log` now checks the RFC 3161 timestamp (`covers_seq`) and, for a run in a case folder, the head recorded at `run_finished` in the case log, and reports which entries are anchored. Residual: a standalone run without a timestamp prints `truncation not detectable without a timestamp or case record`; the 3 entries written after a standalone run's timestamp are reported as not provable | ISO-1, CO-P5 | Timestamp every run (or run with `--case-dir`); keep the head printed in the statistics report with the case file | Optional final timestamp after `run_finished` for standalone runs | Eng. |
 | G21 | Re-hash of the evidence against the registry — **closed**: `verify-case --rehash` re-hashes every registered item still reachable and reports differences (exit 3); unreachable items are listed as warnings; kept for numbering | — | — | — | — |
@@ -664,9 +666,12 @@ Gaps specific to this tool's domain (certificates):
    the case log), not `truncation not detectable without a timestamp or case record` (G20).
 8. **Independent chain check**: `python tests/verify_chain.py <log folder>` exits 0 (it also re-hashes the evidence
    listed in `hashes.csv`).
-9. **Timestamp**: `timestamp_obtained` is present (or obtained later with `rv-certcheck timestamp`), and the token was
-   verified with OpenSSL against the TSA's certificate chain: `openssl ts -verify -digest <head> -in
-   timestamp-<N>.tsr -CAfile <TSA chain>` ([usage.md](usage.md#6-timestamps)). For proceedings needing a
+9. **Timestamp**: `timestamp_obtained` is present (or obtained later with `rv-certcheck timestamp`),
+   `rv-certcheck verify-log <log folder> --tsa-ca <TSA roots>` prints `chain validated to …` (not `chain not checked`),
+   the token was verified independently with OpenSSL (a signature/chain check only): `openssl ts -verify -digest
+   <head> -in timestamp-<N>.tsr -CAfile <TSA chain>` ([usage.md](usage.md#6-timestamps)), and the TSA certificate's
+   revocation status at genTime was established separately from CRL/OCSP evidence covering genTime
+   (`rv-certcheck analyze --crl/--ocsp`), kept with the case. For proceedings needing a
    presumption, a qualified (EU) or ECD (Colombia) TSA was used.
 10. **Outputs match the log**: report files re-hashed against the audited digests ([usage.md](usage.md#8-verifying-a-run)).
 11. **Case folder** (when used): `rv-certcheck verify-case <CASE> --rehash` prints `OK` and re-hashes every
