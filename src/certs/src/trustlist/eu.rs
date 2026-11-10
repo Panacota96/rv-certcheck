@@ -136,10 +136,10 @@ pub fn import_eu(
                         }
                     }
                     ("Name", "ServiceName") if !in_hist => {
-                        if let Some(s) = svc.as_mut() {
-                            if s.name.is_none() || lang_en {
-                                s.name = Some(v);
-                            }
+                        if let Some(s) = svc.as_mut()
+                            && (s.name.is_none() || lang_en)
+                        {
+                            s.name = Some(v);
                         }
                     }
                     ("ServiceTypeIdentifier", _) if !in_hist => {

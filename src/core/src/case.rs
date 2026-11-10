@@ -318,13 +318,13 @@ pub fn verify_log_and_registry(dir: &Path) -> Result<LogState, Vec<String>> {
                     CASE_FILE
                 ));
             }
-            if let Some(d) = first["details"]["case_json_sha256"].as_str() {
-                if sha256_file(&dir.join(CASE_FILE)).as_deref() != Some(d) {
-                    problems.push(format!(
-                        "{}: content differs from the digest recorded at creation (edited)",
-                        CASE_FILE
-                    ));
-                }
+            if let Some(d) = first["details"]["case_json_sha256"].as_str()
+                && sha256_file(&dir.join(CASE_FILE)).as_deref() != Some(d)
+            {
+                problems.push(format!(
+                    "{}: content differs from the digest recorded at creation (edited)",
+                    CASE_FILE
+                ));
             }
         }
         _ => problems.push(format!("{}: the first entry is not case_created", CASE_LOG)),

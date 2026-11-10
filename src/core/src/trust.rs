@@ -1321,8 +1321,36 @@ pub fn load_ca_bundle(path: &Path) -> Result<Vec<Certificate>, String> {
 
 // ---------------------------------------------------------------- PDF signatures
 
+/// RSA PKCS#1 v1.5 signing key that always signs with blinding (fresh OS randomness per signature).
+///
+/// The cms builder signs through the plain `Signer` trait, which rsa 0.9 implements without blinding.
+/// Blinding is the standard countermeasure to timing side channels on the private-key operation
+/// (RUSTSEC-2023-0071, "Marvin"), so the examiner's key is only ever used through this wrapper. PKCS#1 v1.5
+/// signatures are deterministic: blinding changes the timing, not the signature bytes.
+struct BlindedSigningKey(SigningKey<Sha256>);
+
+impl rsa::signature::Keypair for BlindedSigningKey {
+    type VerifyingKey = rsa::pkcs1v15::VerifyingKey<Sha256>;
+    fn verifying_key(&self) -> Self::VerifyingKey {
+        self.0.verifying_key()
+    }
+}
+
+impl spki::SignatureAlgorithmIdentifier for BlindedSigningKey {
+    type Params = der::AnyRef<'static>;
+    const SIGNATURE_ALGORITHM_IDENTIFIER: spki::AlgorithmIdentifier<Self::Params> =
+        <SigningKey<Sha256> as spki::SignatureAlgorithmIdentifier>::SIGNATURE_ALGORITHM_IDENTIFIER;
+}
+
+impl rsa::signature::Signer<Signature> for BlindedSigningKey {
+    fn try_sign(&self, msg: &[u8]) -> Result<Signature, rsa::signature::Error> {
+        use rsa::signature::RandomizedSigner;
+        self.0.try_sign_with_rng(&mut rsa::rand_core::OsRng, msg)
+    }
+}
+
 pub struct PdfSigner {
-    key: SigningKey<Sha256>,
+    key: BlindedSigningKey,
     certs: Vec<Certificate>,
     pub subject: String,
     pub fingerprint_sha256: String,
@@ -1357,7 +1385,7 @@ impl PdfSigner {
             .map_err(|e| e.to_string())?;
         let first = chain.certs().first().ok_or("no certificate in the file")?;
         Ok(PdfSigner {
-            key: SigningKey::<Sha256>::new(key),
+            key: BlindedSigningKey(SigningKey::<Sha256>::new(key)),
             certs,
             subject: first.subject().to_string(),
             fingerprint_sha256: hash_bytes(first.as_der(), HashAlgo::Sha256),
@@ -1549,5 +1577,23 @@ mod tests {
             }
         }
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    #[test]
+    fn blinded_signing_matches_unblinded_and_verifies() {
+        use rsa::signature::{Keypair, Signer, Verifier};
+        // Fresh test key; 1024 bits keeps the debug-build test fast (production keys come from the .p12).
+        let mut rng = rsa::rand_core::OsRng;
+        let key = rsa::RsaPrivateKey::new(&mut rng, 1024).unwrap();
+        let plain = SigningKey::<Sha256>::new(key);
+        let blinded = BlindedSigningKey(plain.clone());
+        let msg = b"Rakvor report bytes";
+        let a = blinded.try_sign(msg).unwrap();
+        let b = plain.try_sign(msg).unwrap();
+        assert_eq!(
+            a, b,
+            "PKCS#1 v1.5 is deterministic: blinding must not change the signature"
+        );
+        assert!(blinded.verifying_key().verify(msg, &a).is_ok());
     }
 }

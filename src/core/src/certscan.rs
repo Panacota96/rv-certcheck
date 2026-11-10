@@ -544,10 +544,10 @@ fn imprint_of(
         let o = crate::hash::hash_reader(&mut tee, &algos, |_| true)
             .map_err(|e| e.to_string())?
             .ok_or("cancelled")?;
-        if let (Some((_, want)), Some((_, got))) = (first, o.digests.first()) {
-            if want != got {
-                return Err("changed since it was hashed in this run".into());
-            }
+        if let (Some((_, want)), Some((_, got))) = (first, o.digests.first())
+            && want != got
+        {
+            return Err("changed since it was hashed in this run".into());
         }
     }
     if let Some(e) = tee.err {

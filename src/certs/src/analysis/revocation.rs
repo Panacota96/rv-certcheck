@@ -76,24 +76,24 @@ fn judge(
         .as_deref()
         .map(rfc3339_to_epoch)
         .transpose()?;
-    if let Some((reason, revoked_at)) = revoked {
-        if reason != "removeFromCRL" {
-            if rfc3339_to_epoch(&revoked_at)? <= at_e {
-                return Ok(Some(Outcome::Revoked {
-                    reason,
-                    revoked_at,
-                    source,
-                }));
-            }
-            let note = format!(
-                "{what} {} lists the certificate as revoked on {revoked_at} ({reason}), after the date checked ({at}): it was not revoked at that date",
-                source.origin
-            );
-            return Ok(Some(Outcome::Good {
+    if let Some((reason, revoked_at)) = revoked
+        && reason != "removeFromCRL"
+    {
+        if rfc3339_to_epoch(&revoked_at)? <= at_e {
+            return Ok(Some(Outcome::Revoked {
+                reason,
+                revoked_at,
                 source,
-                note: Some(note),
             }));
         }
+        let note = format!(
+            "{what} {} lists the certificate as revoked on {revoked_at} ({reason}), after the date checked ({at}): it was not revoked at that date",
+            source.origin
+        );
+        return Ok(Some(Outcome::Good {
+            source,
+            note: Some(note),
+        }));
     }
     let issued_after = this_e.is_some_and(|t| t > at_e);
     if !issued_after && next_e.is_some_and(|n| n < at_e) {
@@ -189,22 +189,20 @@ pub(crate) fn check_detailed(
     if let Some(pos) = outcomes
         .iter()
         .position(|o| matches!(o, Outcome::Revoked { .. }))
-    {
-        if let Outcome::Revoked {
+        && let Outcome::Revoked {
             reason,
             revoked_at,
             source,
         } = outcomes.swap_remove(pos)
-        {
-            return Ok(RevResult {
-                status: RevocationStatus::Revoked {
-                    reason,
-                    revoked_at,
-                    source,
-                },
-                note: None,
-            });
-        }
+    {
+        return Ok(RevResult {
+            status: RevocationStatus::Revoked {
+                reason,
+                revoked_at,
+                source,
+            },
+            note: None,
+        });
     }
     let mut notes = vec![];
     let mut good = None;

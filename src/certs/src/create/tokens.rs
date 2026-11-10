@@ -84,10 +84,10 @@ fn context(module: &Path) -> CertResult<Pkcs11> {
 
 fn find_slot(p: &Pkcs11, token_serial: &str) -> CertResult<(Slot, cryptoki::slot::TokenInfo)> {
     for s in p.get_slots_with_token().map_err(tok("C_GetSlotList"))? {
-        if let Ok(ti) = p.get_token_info(s) {
-            if ti.serial_number().trim() == token_serial.trim() {
-                return Ok((s, ti));
-            }
+        if let Ok(ti) = p.get_token_info(s)
+            && ti.serial_number().trim() == token_serial.trim()
+        {
+            return Ok((s, ti));
         }
     }
     Err(CertError::new(
@@ -112,14 +112,14 @@ pub fn list(module: &Path) -> CertResult<Vec<TokenInfo>> {
             token_present: si.token_present(),
             ..Default::default()
         };
-        if si.token_present() {
-            if let Ok(ti) = p.get_token_info(s) {
-                t.label = label_opt(ti.label());
-                t.manufacturer = label_opt(ti.manufacturer_id());
-                t.model = label_opt(ti.model());
-                t.serial = label_opt(ti.serial_number());
-                t.login_required = ti.login_required();
-            }
+        if si.token_present()
+            && let Ok(ti) = p.get_token_info(s)
+        {
+            t.label = label_opt(ti.label());
+            t.manufacturer = label_opt(ti.manufacturer_id());
+            t.model = label_opt(ti.model());
+            t.serial = label_opt(ti.serial_number());
+            t.login_required = ti.login_required();
         }
         out.push(t);
     }
@@ -146,7 +146,7 @@ pub fn open(module: &Path, token_serial: &str, pin: &Secret) -> CertResult<Token
 
 fn hex_decode(s: &str) -> CertResult<Vec<u8>> {
     let s = s.trim();
-    if s.len() % 2 != 0 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if !s.len().is_multiple_of(2) || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(CertError::new(
             ErrorKind::InvalidInput,
             format!("key id '{s}' is not hex"),
@@ -420,6 +420,11 @@ impl TokenSession {
 fn first_valid_spki(alg: &[u8], point: &[u8]) -> CertResult<Vec<u8>> {
     let unwrapped = unwrap_octet(point);
     for candidate in [&unwrapped[..], point] {
+        // OpenSSL decodes the single octet 0x00 as the SEC1 point at infinity: never a usable public key. Match the
+        // whole value, not its first byte: an Ed25519 key (32 octets of key material) may legitimately start 0x00.
+        if candidate.is_empty() || candidate == [0x00] {
+            continue;
+        }
         let spki = seq(&[alg.to_vec(), bits(candidate)]);
         if openssl::pkey::PKey::public_key_from_der(&spki).is_ok() {
             return Ok(spki);
@@ -433,12 +438,23 @@ fn first_valid_spki(alg: &[u8], point: &[u8]) -> CertResult<Vec<u8>> {
 
 /// CKA_EC_POINT is a DER OCTET STRING holding the point (some modules return the raw point).
 fn unwrap_octet(v: &[u8]) -> Vec<u8> {
+    // An uncompressed point also starts with 0x04: only unwrap when the TLV's declared length covers the rest of
+    // the value exactly (content_of clamps to the input, so the declared length is read here, not inferred).
     if v.first() == Some(&0x04) && v.len() >= 2 {
-        let inner = content_of(v);
-        let hdr = v.len() - inner.len();
-        if hdr >= 2 && inner.len() + hdr == v.len() && !inner.is_empty() {
-            // An uncompressed point also starts with 0x04: only unwrap when the length header matches exactly.
-            return inner.to_vec();
+        let (hdr, declared) = if v[1] < 0x80 {
+            (2usize, Some(v[1] as usize))
+        } else {
+            let n = (v[1] & 0x7f) as usize;
+            let len =
+                (n >= 1 && n <= std::mem::size_of::<usize>() && v.len() >= 2 + n).then(|| {
+                    v[2..2 + n]
+                        .iter()
+                        .fold(0usize, |a, b| (a << 8) | *b as usize)
+                });
+            (2 + n, len)
+        };
+        if declared.is_some_and(|l| l > 0 && hdr.checked_add(l) == Some(v.len())) {
+            return v[hdr..].to_vec();
         }
     }
     v.to_vec()
@@ -487,6 +503,39 @@ mod tests {
             .unwrap();
         assert_eq!(first_valid_spki(&alg, &octet(&raw)).unwrap(), want);
         assert_eq!(first_valid_spki(&alg, &raw).unwrap(), want);
+    }
+
+    /// Regression: a raw point whose X starts 0x01 0x00 also reads as a complete OCTET STRING holding 0x00, which
+    /// OpenSSL decodes as the point at infinity; the old header check was always true, so ~1 key in 65 536 got a
+    /// one-octet "public key". Unwrap only on an exact declared length, and never accept the point at infinity.
+    #[test]
+    fn raw_point_that_looks_like_a_short_octet_string_is_not_unwrapped() {
+        let mut raw = vec![0x04, 0x01, 0x00];
+        raw.resize(65, 0x5a);
+        assert_eq!(unwrap_octet(&raw), raw);
+        assert_eq!(unwrap_octet(&[0x04, 0x03, 1, 2, 3]), vec![1, 2, 3]);
+        assert_eq!(unwrap_octet(&[0x04, 0x81, 0x02, 9, 9]), vec![9, 9]);
+        assert_eq!(
+            unwrap_octet(&[0x04, 0x81, 0x05, 9, 9]),
+            vec![0x04, 0x81, 0x05, 9, 9]
+        );
+        let alg = seq(&[oid(OID_EC_PUBLIC_KEY), oid(OID_P256)]);
+        assert!(first_valid_spki(&alg, &[0x00]).is_err());
+        assert!(first_valid_spki(&alg, &[0x04, 0x01, 0x00]).is_err());
+    }
+
+    /// The point-at-infinity guard must not reject Ed25519 keys whose first octet of key material is 0x00.
+    #[test]
+    fn ed25519_key_starting_with_zero_is_accepted_raw_and_wrapped() {
+        let alg = alg_absent(OID_ED25519);
+        let key = (0..20_000)
+            .map(|_| openssl::pkey::PKey::generate_ed25519().unwrap())
+            .find(|k| k.raw_public_key().unwrap()[0] == 0x00)
+            .expect("1 key in 256 starts with 0x00");
+        let raw = key.raw_public_key().unwrap();
+        let want = key.public_key_to_der().unwrap();
+        assert_eq!(first_valid_spki(&alg, &raw).unwrap(), want);
+        assert_eq!(first_valid_spki(&alg, &octet(&raw)).unwrap(), want);
     }
 
     /// Regression: a raw point (0x04 || X || Y) read as a TLV has a random "length" byte; when it looked like a

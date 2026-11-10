@@ -9,7 +9,7 @@ version = "0.1.0"
 edition = "2024"
 license = "LicenseRef-Rakvor-Audit"
 publish = false
-rust-version = "1.85"
+rust-version = "1.88"
 authors = ["Rakvor"]
 repository = "https://github.com/Panacota96/rv-certcheck"
 

@@ -298,7 +298,7 @@ restriction is not enforced by the OS; on a connected workstation, a Windows Fir
 
 | Item | Version |
 | --- | --- |
-| Rust | Pinned by [rust-toolchain.toml](../rust-toolchain.toml): **1.97.0** with rustfmt and clippy; `rustup` installs and selects it automatically inside the source tree. `Cargo.toml` declares `rust-version = "1.85"` (edition 2024) as the minimum. To match a release exactly, use the compiler recorded in that release's `environment.json` → `tool.rustc` (e.g. `rustc 1.97.0 (2d8144b78 2026-07-07)`). |
+| Rust | Pinned by [rust-toolchain.toml](../rust-toolchain.toml): **1.97.0** with rustfmt and clippy; `rustup` installs and selects it automatically inside the source tree. `Cargo.toml` declares `rust-version = "1.88"` (edition 2024) as the minimum. To match a release exactly, use the compiler recorded in that release's `environment.json` → `tool.rustc` (e.g. `rustc 1.97.0 (2d8144b78 2026-07-07)`). |
 | Windows linker | Visual Studio 2022 Build Tools, workload *Desktop development with C++* (MSVC + Windows SDK); target `x86_64-pc-windows-msvc`. Static CRT is set in `.cargo/config.toml`. |
 | OpenSSL (vendored) | Built from source by `openssl-src` during `cargo build`: needs a C compiler (MSVC on Windows, with its `nmake`; `make` elsewhere) and **Perl**. **Windows: Strawberry Perl** (`choco install strawberryperl`; Git Bash's perl cannot configure OpenSSL for MSVC). If several perls are on PATH, point the build at Strawberry: `$env:OPENSSL_SRC_PERL = "C:\Strawberry\perl\bin\perl.exe"` (what CI does). NASM is not needed (`no-asm` build without it). |
 | Linux | `gcc` (or `clang`), `make` and `perl` for the vendored OpenSSL; nothing else to build the CLI. |

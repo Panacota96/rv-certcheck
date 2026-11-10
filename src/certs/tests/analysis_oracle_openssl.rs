@@ -53,10 +53,10 @@ fn cli_verify(bin: &str, args: &[String]) -> (bool, Vec<(u32, i32)>) {
         // error 10 at 0 depth lookup: certificate has expired
         if let Some(rest) = l.strip_prefix("error ") {
             let mut it = rest.split_whitespace();
-            if let (Some(c), Some("at"), Some(d)) = (it.next(), it.next(), it.next()) {
-                if let (Ok(c), Ok(d)) = (c.parse(), d.parse()) {
-                    errs.push((d, c));
-                }
+            if let (Some(c), Some("at"), Some(d)) = (it.next(), it.next(), it.next())
+                && let (Ok(c), Ok(d)) = (c.parse(), d.parse())
+            {
+                errs.push((d, c));
             }
         }
     }

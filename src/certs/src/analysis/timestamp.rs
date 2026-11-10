@@ -62,10 +62,10 @@ fn signer_facts(token: &[u8]) -> (Vec<Vec<u8>>, SignerFacts) {
         return (certs, f);
     };
     for c in sd.certificates.iter().flat_map(|s| s.0.iter()) {
-        if let cms::cert::CertificateChoices::Certificate(c) = c {
-            if let Ok(d) = c.to_der() {
-                certs.push(d);
-            }
+        if let cms::cert::CertificateChoices::Certificate(c) = c
+            && let Ok(d) = c.to_der()
+        {
+            certs.push(d);
         }
     }
     let Some(si) = sd.signer_infos.0.iter().next() else {
@@ -279,10 +279,11 @@ pub fn verify_timestamp_token_checked(
         info: info.clone(),
         ..Default::default()
     };
-    if let Some(s) = &info.response_status {
-        if s != "granted" && s != "grantedWithMods" {
-            problems.push(format!("the TSA did not grant the request (status {s})"));
-        }
+    if let Some(s) = &info.response_status
+        && s != "granted"
+        && s != "grantedWithMods"
+    {
+        problems.push(format!("the TSA did not grant the request (status {s})"));
     }
     if let Some(tok) = &tok {
         // 2. CMS signature (signer found among the embedded and the run's certificates).
@@ -324,11 +325,11 @@ pub fn verify_timestamp_token_checked(
                 // Signer certificate not embedded: look among the run's certificates.
                 let mut found = None;
                 for d in req.untrusted_der {
-                    if let Ok(c) = cert_info(d) {
-                        if signer_index(std::slice::from_ref(&c), &facts) == Some(0) {
-                            found = Some(c);
-                            break;
-                        }
+                    if let Ok(c) = cert_info(d)
+                        && signer_index(std::slice::from_ref(&c), &facts) == Some(0)
+                    {
+                        found = Some(c);
+                        break;
                     }
                 }
                 found
