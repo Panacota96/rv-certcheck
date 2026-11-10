@@ -420,8 +420,9 @@ impl TokenSession {
 fn first_valid_spki(alg: &[u8], point: &[u8]) -> CertResult<Vec<u8>> {
     let unwrapped = unwrap_octet(point);
     for candidate in [&unwrapped[..], point] {
-        // OpenSSL decodes the single octet 0x00 as the point at infinity: never a usable public key.
-        if candidate.first().is_none_or(|b| *b == 0x00) {
+        // OpenSSL decodes the single octet 0x00 as the SEC1 point at infinity: never a usable public key. Match the
+        // whole value, not its first byte: an Ed25519 key (32 octets of key material) may legitimately start 0x00.
+        if candidate.is_empty() || candidate == [0x00] {
             continue;
         }
         let spki = seq(&[alg.to_vec(), bits(candidate)]);
@@ -521,6 +522,20 @@ mod tests {
         let alg = seq(&[oid(OID_EC_PUBLIC_KEY), oid(OID_P256)]);
         assert!(first_valid_spki(&alg, &[0x00]).is_err());
         assert!(first_valid_spki(&alg, &[0x04, 0x01, 0x00]).is_err());
+    }
+
+    /// The point-at-infinity guard must not reject Ed25519 keys whose first octet of key material is 0x00.
+    #[test]
+    fn ed25519_key_starting_with_zero_is_accepted_raw_and_wrapped() {
+        let alg = alg_absent(OID_ED25519);
+        let key = (0..20_000)
+            .map(|_| openssl::pkey::PKey::generate_ed25519().unwrap())
+            .find(|k| k.raw_public_key().unwrap()[0] == 0x00)
+            .expect("1 key in 256 starts with 0x00");
+        let raw = key.raw_public_key().unwrap();
+        let want = key.public_key_to_der().unwrap();
+        assert_eq!(first_valid_spki(&alg, &raw).unwrap(), want);
+        assert_eq!(first_valid_spki(&alg, &octet(&raw)).unwrap(), want);
     }
 
     /// Regression: a raw point (0x04 || X || Y) read as a TLV has a random "length" byte; when it looked like a
