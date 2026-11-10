@@ -5,6 +5,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Entries are generated from
 [Conventional Commits](https://www.conventionalcommits.org/) by release-please and reviewed by a human.
 
+## [0.2.1](https://github.com/Panacota96/rv-certcheck/compare/v0.2.0...v0.2.1) (2026-11-10)
+
+
+### Bug Fixes
+
+* **trust:** drive timestamp checks from the audit log; RFC 3161/5280 TSA path rules ([4005378](https://github.com/Panacota96/rv-certcheck/commit/4005378b682885fb62aadca2c389d9990e27685c))
+* **trust:** verify the TSA CMS signature and, with --tsa-ca, its chain ([aa83f08](https://github.com/Panacota96/rv-certcheck/commit/aa83f0884256fd06278a11ed87e7ec0f776b637e))
+* **trust:** verify the TSA CMS signature and, with --tsa-ca, its chain ([24e3949](https://github.com/Panacota96/rv-certcheck/commit/24e394915421a32408166a25db55ecc4973158f3))
+
 ## [0.2.0](https://github.com/Panacota96/rv-certcheck/compare/v0.1.0...v0.2.0) (2026-11-04)
 
 
