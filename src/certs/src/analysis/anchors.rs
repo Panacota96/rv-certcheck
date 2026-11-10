@@ -141,27 +141,27 @@ fn system_roots() -> CertResult<Vec<Vec<u8>>> {
     }
     let mut out = vec![];
     for f in files {
-        if let Ok(data) = std::fs::read(&f) {
-            if let Ok(c) = certificates_in(&data) {
-                out = c;
-                break;
-            }
+        if let Ok(data) = std::fs::read(&f)
+            && let Ok(c) = certificates_in(&data)
+        {
+            out = c;
+            break;
         }
     }
-    if out.is_empty() {
-        if let Some(d) = std::env::var_os("SSL_CERT_DIR").filter(|v| !v.is_empty()) {
-            for e in std::fs::read_dir(PathBuf::from(d))
-                .into_iter()
-                .flatten()
-                .flatten()
+    if out.is_empty()
+        && let Some(d) = std::env::var_os("SSL_CERT_DIR").filter(|v| !v.is_empty())
+    {
+        for e in std::fs::read_dir(PathBuf::from(d))
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            if let Ok(data) = std::fs::read(e.path())
+                && let Ok(c) = certificates_in(&data)
             {
-                if let Ok(data) = std::fs::read(e.path()) {
-                    if let Ok(c) = certificates_in(&data) {
-                        for d in c {
-                            if !out.contains(&d) {
-                                out.push(d);
-                            }
-                        }
+                for d in c {
+                    if !out.contains(&d) {
+                        out.push(d);
                     }
                 }
             }

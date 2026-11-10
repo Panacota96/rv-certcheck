@@ -23,15 +23,15 @@ pub(crate) fn sniff_inner(data: &[u8]) -> Sniffed {
             encrypted,
         };
     }
-    if let Some(der) = base64_body(data) {
-        if let Some((kind, encrypted)) = der_kind(&der) {
-            return Sniffed {
-                kind: InputKindOrUnknown(kind),
-                encoding: Encoding::Base64,
-                pem_labels: vec![],
-                encrypted,
-            };
-        }
+    if let Some(der) = base64_body(data)
+        && let Some((kind, encrypted)) = der_kind(&der)
+    {
+        return Sniffed {
+            kind: InputKindOrUnknown(kind),
+            encoding: Encoding::Base64,
+            pem_labels: vec![],
+            encrypted,
+        };
     }
     Sniffed::default()
 }
@@ -177,7 +177,7 @@ pub(crate) fn base64_body(data: &[u8]) -> Option<Vec<u8>> {
             _ => return None,
         }
     }
-    if s.len() % 4 != 0 {
+    if !s.len().is_multiple_of(4) {
         return None;
     }
     openssl::base64::decode_block(&s).ok()

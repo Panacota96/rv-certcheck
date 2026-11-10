@@ -195,23 +195,23 @@ pub fn analyze(file_name: &str, size: u64, head: &[u8]) -> Analysis {
     if size == 0 {
         findings.push(Finding::new("EMPTY_FILE", Severity::Info));
     }
-    if let (Some(s), Some(ext)) = (sig, extension.as_deref()) {
-        if !s.extensions.contains(&ext) {
-            if s.executable {
-                findings.push(
-                    Finding::new("EXECUTABLE_CONTENT", Severity::High)
-                        .with("detected", s.name)
-                        .with("extension", ext),
-                );
-            } else if known_extension(ext)
-                || matches!(ext, "txt" | "csv" | "log" | "xml" | "json" | "html")
-            {
-                findings.push(
-                    Finding::new("EXTENSION_MISMATCH", Severity::Medium)
-                        .with("detected", s.name)
-                        .with("extension", ext),
-                );
-            }
+    if let (Some(s), Some(ext)) = (sig, extension.as_deref())
+        && !s.extensions.contains(&ext)
+    {
+        if s.executable {
+            findings.push(
+                Finding::new("EXECUTABLE_CONTENT", Severity::High)
+                    .with("detected", s.name)
+                    .with("extension", ext),
+            );
+        } else if known_extension(ext)
+            || matches!(ext, "txt" | "csv" | "log" | "xml" | "json" | "html")
+        {
+            findings.push(
+                Finding::new("EXTENSION_MISMATCH", Severity::Medium)
+                    .with("detected", s.name)
+                    .with("extension", ext),
+            );
         }
     }
     Analysis {

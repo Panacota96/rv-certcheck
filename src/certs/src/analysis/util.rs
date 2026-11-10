@@ -30,10 +30,10 @@ pub fn epoch_to_rfc3339(secs: i64) -> String {
 
 /// RFC 3339 (any offset) → seconds since the Unix epoch.
 pub fn rfc3339_to_epoch(s: &str) -> CertResult<i64> {
-    if let Ok(AtTime::Fixed(t)) = AtTime::parse(s) {
-        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&t) {
-            return Ok(dt.timestamp());
-        }
+    if let Ok(AtTime::Fixed(t)) = AtTime::parse(s)
+        && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&t)
+    {
+        return Ok(dt.timestamp());
     }
     Err(CertError::new(
         ErrorKind::InvalidInput,
@@ -63,10 +63,10 @@ pub fn printed_time_to_rfc3339(s: &str) -> Option<String> {
     let norm = norm.trim_end_matches(" GMT");
     // Fractional seconds (`00:00:00.123`) are dropped: the model has second precision.
     let mut parts: Vec<String> = norm.split(' ').map(str::to_string).collect();
-    if let Some(p) = parts.get_mut(2) {
-        if let Some((hms, _)) = p.split_once('.') {
-            *p = hms.to_string();
-        }
+    if let Some(p) = parts.get_mut(2)
+        && let Some((hms, _)) = p.split_once('.')
+    {
+        *p = hms.to_string();
     }
     let norm = parts.join(" ");
     chrono::NaiveDateTime::parse_from_str(&norm, "%b %d %H:%M:%S %Y")

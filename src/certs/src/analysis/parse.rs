@@ -137,17 +137,17 @@ pub(crate) fn pkcs7_contents(der: &[u8]) -> CertResult<DerLists> {
         .and_then(|ci| ci.content.decode_as::<cms::signed_data::SignedData>().ok());
     if let Some(sd) = decoded {
         for c in sd.certificates.iter().flat_map(|s| s.0.iter()) {
-            if let cms::cert::CertificateChoices::Certificate(c) = c {
-                if let Ok(d) = c.to_der() {
-                    certs.push(d);
-                }
+            if let cms::cert::CertificateChoices::Certificate(c) = c
+                && let Ok(d) = c.to_der()
+            {
+                certs.push(d);
             }
         }
         for r in sd.crls.iter().flat_map(|s| s.0.iter()) {
-            if let cms::revocation::RevocationInfoChoice::Crl(c) = r {
-                if let Ok(d) = c.to_der() {
-                    crls.push(d);
-                }
+            if let cms::revocation::RevocationInfoChoice::Crl(c) = r
+                && let Ok(d) = c.to_der()
+            {
+                crls.push(d);
             }
         }
         return Ok((certs, crls));

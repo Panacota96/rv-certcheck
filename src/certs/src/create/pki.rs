@@ -1031,29 +1031,28 @@ pub fn issue_with(req: &IssueRequest, opts: &IssueOptions) -> CertResult<IssueRe
     let rel = format!("certs/{sh}.crt");
     let (cert_path, file_sha) = write_cert(&req.ca_dir, &rel, &der)?;
     let mut p12_path = None;
-    if req.profile == IssueProfile::Examiner {
-        if let (Some(Signer::Soft(k)), Some(KeyTarget::EncryptedFile { path, .. }), Some(pw)) =
+    if req.profile == IssueProfile::Examiner
+        && let (Some(Signer::Soft(k)), Some(KeyTarget::EncryptedFile { path, .. }), Some(pw)) =
             (&subject_key, &req.key_target, &req.p12_password)
-        {
-            let p = path
-                .parent()
-                .unwrap_or(Path::new("."))
-                .join(format!("{sh}.p12"));
-            let cn = name_rdns(cert.subject_name())
-                .into_iter()
-                .find(|(k, _)| k == "CN")
-                .map(|(_, v)| v)
-                .unwrap_or_else(|| sh.clone());
-            let bytes = keys::pkcs12(
-                k,
-                &[der.clone(), ca.cert_der.clone()],
-                &cn,
-                pw,
-                &mut Rand::Os,
-            )?;
-            keys::write_new(&p, &bytes, true)?;
-            p12_path = Some(p);
-        }
+    {
+        let p = path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join(format!("{sh}.p12"));
+        let cn = name_rdns(cert.subject_name())
+            .into_iter()
+            .find(|(k, _)| k == "CN")
+            .map(|(_, v)| v)
+            .unwrap_or_else(|| sh.clone());
+        let bytes = keys::pkcs12(
+            k,
+            &[der.clone(), ca.cert_der.clone()],
+            &cn,
+            pw,
+            &mut Rand::Os,
+        )?;
+        keys::write_new(&p, &bytes, true)?;
+        p12_path = Some(p);
     }
     let mut r = ca.record("issued", &req.actor);
     r.serial_hex = Some(sh);

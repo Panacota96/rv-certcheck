@@ -224,10 +224,10 @@ pub fn import_co_csv(
         if !g.1.contains(&period) {
             g.1.push(period);
         }
-        if let Some(d) = der {
-            if !g.2.contains(&d) {
-                g.2.push(d);
-            }
+        if let Some(d) = der
+            && !g.2.contains(&d)
+        {
+            g.2.push(d);
         }
         if g.3.is_empty() {
             g.3 = src;

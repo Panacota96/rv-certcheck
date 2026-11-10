@@ -377,19 +377,19 @@ pub fn validate_chain(req: &ChainRequest, opts: &ValidationOptions) -> CertResul
         if let Some(snap) = &a.snapshot {
             let mut any = false;
             for n in &nodes {
-                if let Some(m) = &n.trust_list {
-                    if m.snapshot_id == snap.id {
-                        any = true;
-                        signals.push(
-                            Signal::of(codes::CERT_IN_TRUST_LIST)
-                                .with("subject", &n.cert.subject)
-                                .with("list", &m.list)
-                                .with("snapshot", &m.snapshot_id)
-                                .with("service", &m.service_name)
-                                .with("status", &m.status_at)
-                                .with("at", &m.at),
-                        );
-                    }
+                if let Some(m) = &n.trust_list
+                    && m.snapshot_id == snap.id
+                {
+                    any = true;
+                    signals.push(
+                        Signal::of(codes::CERT_IN_TRUST_LIST)
+                            .with("subject", &n.cert.subject)
+                            .with("list", &m.list)
+                            .with("snapshot", &m.snapshot_id)
+                            .with("service", &m.service_name)
+                            .with("status", &m.status_at)
+                            .with("at", &m.at),
+                    );
                 }
             }
             if !any {

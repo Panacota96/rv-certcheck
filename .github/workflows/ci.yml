@@ -26,10 +26,10 @@ jobs:
         run: rustup toolchain install && rustc --version
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
-      - name: Dependency licences and sources (cargo-deny; no GPL/AGPL/LGPL)
+      - name: Dependency advisories, licences and sources (cargo-deny; no GPL/AGPL/LGPL; see deny.toml)
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
-          command: check licenses bans sources
+          command: check advisories licenses bans sources
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - name: actionlint
         run: |
