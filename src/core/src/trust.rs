@@ -7,10 +7,11 @@
 //!   timestamp-<seq>.json  tsa, gen_time, covers_seq, head, token_sha256
 //! Offline: the run completes, `timestamp_pending` is logged, `<tool> timestamp <log-dir>` adds it later.
 //!
-//! `verify-log` re-checks each token: imprint, nonce-free status, and the CMS signature of the TSA (signer
-//! certificate in the token, ESS signing-certificate binding, message digest over TSTInfo, RSA signature,
-//! timeStamping EKU); with a CA bundle (`--tsa-ca`) also the certificate chain at genTime. Revocation is not
-//! checked.
+//! `verify-log` re-checks every token the audit log records (`timestamp_obtained`; a missing `.tsr` or `.json` is a
+//! problem, never a skipped check) and any token file next to it that no entry records: imprint, status, and the
+//! CMS signature of the TSA (signer certificate in the token, ESS signing-certificate binding, message digest over
+//! TSTInfo, RSA signature, critical timeStamping-only EKU); with a CA bundle (`--tsa-ca`) also the certificate path
+//! at genTime (an RFC 5280 subset: see `check_path`). Revocation is never checked.
 //!
 //! PDF signature: CMS detached signature (adbe.pkcs7.detached) with the examiner's .p12/.pfx (RSA keys).
 //! The password is never logged.
@@ -26,7 +27,6 @@ use rsa::pkcs8::DecodePrivateKey;
 use serde_json::{Value, json};
 use sha2_legacy::{Digest, Sha256};
 use spki::AlgorithmIdentifierOwned;
-use std::collections::BTreeMap;
 use std::path::Path;
 use x509_cert::Certificate;
 use x509_tsp::{MessageImprint, TimeStampReq, TimeStampResp, TspVersion};
@@ -248,58 +248,213 @@ pub fn timestamp_head(
     Ok(ts)
 }
 
-/// Checks every timestamp-*.json/.tsr pair against the chain heads (seq -> entry_hash), including the TSA's
-/// CMS signature (no trust anchors: the chain is not validated). Returns the problems only.
-pub fn verify_timestamps(log_dir: &Path, heads: &BTreeMap<u64, String>) -> Vec<String> {
-    verify_timestamps_with(log_dir, heads, None).problems
+/// Checks the RFC 3161 tokens of the audit log at `audit_path` (see [`verify_timestamps_with`]) without trust
+/// anchors (the TSA certificate chain is not validated). Returns the problems only.
+pub fn verify_timestamps(audit_path: &Path) -> Vec<String> {
+    verify_timestamps_with(audit_path, None).problems
 }
 
 /// Outcome of `verify_timestamps_with`: problems (any → the log does not verify) and one line per token.
 #[derive(Debug, Default)]
 pub struct TimestampVerification {
     pub problems: Vec<String>,
+    /// One line per token whose TSA signature (and, with anchors, chain) verified.
     pub tokens: Vec<String>,
+    /// One line per token known (recorded in the log or found next to it):
+    /// "timestamp <gen_time> by <tsa> covers entry #<seq>".
+    pub listed: Vec<String>,
+    /// (covered entry, token file) for every token whose covered entry is in the log: the truncation anchors.
+    pub covers: Vec<(u64, String)>,
 }
 
-/// Like [`verify_timestamps`], and with `anchors` (a CA bundle, `--tsa-ca`) also validates the TSA
-/// certificate chain up to one of them at the token's genTime.
+/// A token file name as the tools write it (`timestamp-<seq>.tsr`): a plain name in the log folder.
+fn is_token_name(name: &str) -> bool {
+    name.starts_with("timestamp-")
+        && name.ends_with(".tsr")
+        && name.len() <= 64
+        && !name.contains(['/', '\\', ':'])
+        && !name.contains("..")
+}
+
+fn read_json(path: &Path) -> Option<Value> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+}
+
+/// Checks the RFC 3161 tokens of the audit log at `audit_path`, driven by the log itself so that deleting a
+/// file cannot skip a check (fail closed):
+///
+/// 1. every `timestamp_obtained` entry names a token: its `.tsr` must be next to the log with the recorded
+///    SHA-256, its `timestamp-<seq>.json` metadata must be there and agree with the entry, the entry it covers
+///    must still be in the log with that hash, and the token's TSA signature (and, with `anchors` — a CA bundle,
+///    `--tsa-ca` — its certificate chain at genTime) must verify;
+/// 2. a `timestamp-*.json` next to the log that no entry records (the run could not record it) is checked the
+///    same way from its own fields;
+/// 3. a `timestamp-*.tsr` that neither an entry nor a metadata file names cannot be checked and is a problem.
+///
+/// Revocation of the TSA certificate is never checked.
 pub fn verify_timestamps_with(
-    log_dir: &Path,
-    heads: &BTreeMap<u64, String>,
+    audit_path: &Path,
     anchors: Option<&[Certificate]>,
 ) -> TimestampVerification {
-    let mut out = TimestampVerification::default();
-    let mut metas: Vec<_> = std::fs::read_dir(log_dir)
-        .map(|d| {
-            d.filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .filter(|p| {
-                    p.file_name()
-                        .and_then(|n| n.to_str())
-                        .is_some_and(|n| n.starts_with("timestamp-") && n.ends_with(".json"))
-                })
-                .collect()
-        })
+    let log_dir = audit_path
+        .parent()
+        .map(Path::to_path_buf)
         .unwrap_or_default();
-    metas.sort();
-    for m in metas {
-        let meta: Value = match std::fs::read_to_string(&m)
-            .ok()
-            .and_then(|t| serde_json::from_str(&t).ok())
-        {
-            Some(v) => v,
-            None => {
-                out.problems.push(format!("{}: unreadable", m.display()));
-                continue;
-            }
+    let heads = crate::audit::heads(audit_path);
+    let entries: Vec<Value> = std::fs::read_to_string(audit_path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    let mut out = TimestampVerification::default();
+    let mut named: Vec<String> = Vec::new();
+    // What a token claims: listed, and (when its covered entry is in the log) a truncation anchor. Returns the
+    // covered entry's hash, None (a problem) when the entry is not recorded or not in the log.
+    let claim = |out: &mut TimestampVerification,
+                 file: &str,
+                 covers: Option<u64>,
+                 tsa: &str,
+                 gen_time: &str|
+     -> Option<(u64, Vec<u8>)> {
+        let Some(seq) = covers else {
+            out.problems
+                .push(format!("{}: the entry it covers is not recorded", file));
+            return None;
         };
-        let file = meta["file"].as_str().unwrap_or_default();
-        let seq = meta["covers_seq"].as_u64().unwrap_or(0);
+        out.listed.push(format!(
+            "timestamp {} by {} covers entry #{}",
+            gen_time, tsa, seq
+        ));
         let Some(head) = heads.get(&seq).and_then(|h| crate::hash::hex_decode(h)) else {
             out.problems.push(format!(
                 "truncated: {} covers entry #{}, which is not in the log (entries removed from the end)",
                 file, seq
             ));
+            return None;
+        };
+        if seq > 0 {
+            out.covers.push((seq, file.to_string()));
+        }
+        Some((seq, head))
+    };
+    let check = |out: &mut TimestampVerification,
+                 file: &str,
+                 seq: u64,
+                 head: &[u8],
+                 tsa: &str,
+                 der: &[u8]| {
+        match verify_token(der, head, anchors) {
+            Ok(c) => out.tokens.push(format!(
+                "timestamp {} by {} covers entry #{}: {}",
+                c.gen_time,
+                tsa,
+                seq,
+                c.describe()
+            )),
+            Err(e) => out
+                .problems
+                .push(format!("{}: {} (entry #{})", file, e, seq)),
+        }
+    };
+
+    // 1. Tokens the audit log records.
+    for e in entries
+        .iter()
+        .filter(|e| e["action"] == "timestamp_obtained")
+    {
+        let d = &e["details"];
+        let file = d["file"].as_str().unwrap_or_default();
+        let at = e["seq"].as_u64().unwrap_or(0);
+        if !is_token_name(file) {
+            out.problems.push(format!(
+                "entry #{} records timestamp token {}, which is missing or altered (not a token file name)",
+                at,
+                if file.is_empty() { "?" } else { file }
+            ));
+            continue;
+        }
+        if named.iter().any(|n| n == file) {
+            continue;
+        }
+        named.push(file.to_string());
+        let want = d["token_sha256"].as_str().unwrap_or_default();
+        let covers = d["covers_seq"].as_u64();
+        let (tsa, gen_time) = (
+            d["tsa"].as_str().unwrap_or("?"),
+            d["gen_time"].as_str().unwrap_or("?"),
+        );
+        if covers.is_some_and(|c| c >= at) {
+            out.problems.push(format!(
+                "entry #{} records timestamp token {} covering a later entry",
+                at, file
+            ));
+            continue;
+        }
+        let claimed = claim(&mut out, file, covers, tsa, gen_time);
+        let der = std::fs::read(log_dir.join(file)).unwrap_or_default();
+        if der.is_empty() || hash_bytes(&der, HashAlgo::Sha256) != want {
+            out.problems.push(format!(
+                "entry #{} records timestamp token {}, which is missing or altered",
+                at, file
+            ));
+            continue;
+        }
+        let meta_name = format!("{}.json", &file[..file.len() - 4]);
+        match read_json(&log_dir.join(&meta_name)) {
+            None => out.problems.push(format!(
+                "{}: its metadata {} is missing or unreadable (entry #{} records the token)",
+                file, meta_name, at
+            )),
+            Some(m) => {
+                if m["file"].as_str() != Some(file)
+                    || m["token_sha256"].as_str() != Some(want)
+                    || m["covers_seq"].as_u64() != covers
+                {
+                    out.problems.push(format!(
+                        "{}: its metadata {} does not match entry #{} of the audit log",
+                        file, meta_name, at
+                    ));
+                }
+            }
+        }
+        if let Some((seq, head)) = claimed {
+            check(&mut out, file, seq, &head, tsa, &der);
+        }
+    }
+
+    // 2. and 3. Token files next to the log that no entry records.
+    let mut on_disk: Vec<String> = std::fs::read_dir(&log_dir)
+        .map(|d| {
+            d.filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.starts_with("timestamp-"))
+                .collect()
+        })
+        .unwrap_or_default();
+    on_disk.sort();
+    for m in on_disk.iter().filter(|n| n.ends_with(".json")) {
+        let stem = &m[..m.len() - 5];
+        if named.iter().any(|n| n.strip_suffix(".tsr") == Some(stem)) {
+            continue;
+        }
+        let Some(meta) = read_json(&log_dir.join(m)) else {
+            out.problems
+                .push(format!("{}: unreadable", log_dir.join(m).display()));
+            continue;
+        };
+        let file = meta["file"].as_str().unwrap_or_default();
+        if !is_token_name(file) {
+            out.problems
+                .push(format!("{}: names no token file ({:?})", m, file));
+            continue;
+        }
+        named.push(file.to_string());
+        let tsa = meta["tsa"].as_str().unwrap_or("?");
+        let gen_time = meta["gen_time"].as_str().unwrap_or("?");
+        let Some((seq, head)) = claim(&mut out, file, meta["covers_seq"].as_u64(), tsa, gen_time)
+        else {
             continue;
         };
         let der = std::fs::read(log_dir.join(file)).unwrap_or_default();
@@ -308,17 +463,14 @@ pub fn verify_timestamps_with(
                 .push(format!("{}: token file missing or altered", file));
             continue;
         }
-        match verify_token(&der, &head, anchors) {
-            Ok(c) => out.tokens.push(format!(
-                "timestamp {} by {} covers entry #{}: {}",
-                c.gen_time,
-                meta["tsa"].as_str().unwrap_or("?"),
-                seq,
-                c.describe()
-            )),
-            Err(e) => out
-                .problems
-                .push(format!("{}: {} (entry #{})", file, e, seq)),
+        check(&mut out, file, seq, &head, tsa, &der);
+    }
+    for t in on_disk.iter().filter(|n| n.ends_with(".tsr")) {
+        if !named.iter().any(|n| n == t) {
+            out.problems.push(format!(
+                "{}: a timestamp token that neither the audit log nor a metadata file records (cannot be checked)",
+                t
+            ));
         }
     }
     out
@@ -602,15 +754,8 @@ pub fn verify_token(
         si.signature.as_bytes(),
     )
     .map_err(|e| format!("TSA {}", e))?;
-    // RFC 3161 §2.3: the TSA certificate has extendedKeyUsage id-kp-timeStamping.
-    let eku_ok = ext(signer, OID_EXT_EKU)
-        .and_then(|e| {
-            x509_cert::ext::pkix::ExtendedKeyUsage::from_der(e.extn_value.as_bytes()).ok()
-        })
-        .is_some_and(|eku| eku.0.contains(&oid(OID_KP_TIME_STAMPING)));
-    if !eku_ok {
-        return Err("the TSA certificate lacks the timeStamping extended key usage".into());
-    }
+    // RFC 3161 §2.3: the TSA certificate's extendedKeyUsage is critical and contains only id-kp-timeStamping.
+    check_tsa_eku(signer)?;
     let anchor = match anchors {
         None => None,
         Some(a) => Some(validate_chain(signer, &certs, a, &gen_time)?),
@@ -620,6 +765,31 @@ pub fn verify_token(
         tsa_subject,
         anchor,
     })
+}
+
+/// RFC 3161 §2.3: "The corresponding certificate MUST contain only one instance of the extended key usage field
+/// extension … with KeyPurposeID having value id-kp-timeStamping. This extension MUST be critical." Same rule as
+/// rv-certcheck's token analysis and OpenSSL's `timestampsign` purpose.
+fn check_tsa_eku(signer: &Certificate) -> Result<(), String> {
+    let e = ext(signer, OID_EXT_EKU)
+        .ok_or("the TSA certificate lacks the timeStamping extended key usage")?;
+    let eku = x509_cert::ext::pkix::ExtendedKeyUsage::from_der(e.extn_value.as_bytes())
+        .map_err(|_| "the TSA certificate's extended key usage is malformed".to_string())?;
+    if !eku.0.contains(&oid(OID_KP_TIME_STAMPING)) {
+        return Err("the TSA certificate lacks the timeStamping extended key usage".into());
+    }
+    if eku.0.len() != 1 {
+        return Err(
+            "the TSA certificate's extended key usage must contain only id-kp-timeStamping (RFC 3161 §2.3)"
+                .into(),
+        );
+    }
+    if !e.critical {
+        return Err(
+            "the TSA certificate's extended key usage must be critical (RFC 3161 §2.3)".into(),
+        );
+    }
+    Ok(())
 }
 
 fn unix_of(gen_time: &str) -> Result<u64, String> {
@@ -663,58 +833,472 @@ fn signed_by(cert: &Certificate, issuer: &Certificate) -> bool {
     .is_ok()
 }
 
-fn is_ca(c: &Certificate) -> bool {
-    ext(c, OID_EXT_BASIC_CONSTRAINTS)
-        .and_then(|e| {
-            x509_cert::ext::pkix::BasicConstraints::from_der(e.extn_value.as_bytes()).ok()
-        })
-        .is_some_and(|b| b.ca)
+// ---------------------------------------------------------------- TSA certificate path (RFC 5280 subset)
+//
+// What is checked on the path TSA certificate → intermediates (from the token) → anchor (from --tsa-ca):
+// * every signature (RSA PKCS#1 v1.5) and every certificate's validity at genTime;
+// * basicConstraints cA=TRUE on every intermediate; an anchor is a CA when it has cA=TRUE, or (no
+//   basicConstraints) when it is an X.509 v1 certificate or its keyUsage has keyCertSign (as OpenSSL);
+// * keyCertSign when an issuer (intermediate or anchor) has a keyUsage extension;
+// * pathLenConstraint of every issuer, anchor included: non-self-issued intermediates below it (RFC 5280
+//   §6.1.4(l)-(m)); self-issued key-rollover certificates do not count;
+// * nameConstraints of every issuer: directoryName subtrees are evaluated against the subject (and
+//   directoryName subjectAltNames) of every certificate below it, except self-issued intermediates (§6.1.3(b));
+//   names compared per §7.1 (attribute values of string types case-folded with whitespace collapsed). Other
+//   name forms (dNSName, rfc822Name, iPAddress, URI, …) are not evaluated: a subtree of such a form while a
+//   certificate below carries a name of that form (subjectAltName, or emailAddress in the subject for
+//   rfc822Name) rejects the path, fail closed; subtrees with minimum/maximum are rejected too;
+// * critical extensions: only those in [`HANDLED_CRITICAL`] are accepted, on every certificate of the path
+//   including the anchor; any other critical extension (policyConstraints, policyMappings, inhibitAnyPolicy
+//   among them: certificate-policy processing is not implemented) rejects it. A critical certificatePolicies
+//   is accepted: with no policy required by the verifier and policyConstraints rejected, §6.1.5(g) succeeds
+//   whatever the policies are. A critical extendedKeyUsage on a CA must allow timeStamping (or anyEKU);
+// * path building tries every candidate issuer in the token and every candidate anchor in the bundle
+//   (cross-signed intermediates, expired-then-renewed anchors), depth-first, at most [`MAX_PATH`] certificates
+//   below the anchor, never the same certificate twice on one path, at most [`MAX_CANDIDATES`] signature checks.
+// Not checked: revocation (CRL/OCSP) — never; certificate policies (see above); the extended key usage of CAs
+// when not critical; algorithms other than RSA.
+
+const OID_EXT_KEY_USAGE: &str = "2.5.29.15";
+const OID_EXT_SAN: &str = "2.5.29.17";
+const OID_EXT_NAME_CONSTRAINTS: &str = "2.5.29.30";
+const OID_EXT_CERT_POLICIES: &str = "2.5.29.32";
+const OID_EXT_AKI: &str = "2.5.29.35";
+const OID_ANY_EKU: &str = "2.5.29.37.0";
+const OID_EMAIL_ADDRESS: &str = "1.2.840.113549.1.9.1";
+
+/// Critical extensions the path validation processes (any other critical extension rejects the path).
+const HANDLED_CRITICAL: [&str; 8] = [
+    OID_EXT_BASIC_CONSTRAINTS,
+    OID_EXT_KEY_USAGE,
+    OID_EXT_EKU,
+    OID_EXT_NAME_CONSTRAINTS,
+    OID_EXT_CERT_POLICIES,
+    OID_EXT_SAN,
+    OID_EXT_SKI,
+    OID_EXT_AKI,
+];
+
+/// At most this many certificates below the trust anchor (the TSA certificate and its intermediates).
+const MAX_PATH: usize = 8;
+/// At most this many candidate issuers tried (signature checks) while building one path.
+const MAX_CANDIDATES: usize = 512;
+
+fn decode_ext<T: for<'a> Decode<'a>>(
+    c: &Certificate,
+    id: &str,
+    what: &str,
+) -> Result<Option<(T, bool)>, String> {
+    match ext(c, id) {
+        None => Ok(None),
+        Some(e) => T::from_der(e.extn_value.as_bytes())
+            .map(|v| Some((v, e.critical)))
+            .map_err(|_| format!("certificate {} has a malformed {}", subject(c), what)),
+    }
 }
 
-/// Builds and checks a path from the TSA certificate to one of `anchors`: each signature (RSA), validity at
-/// genTime, and the CA flag of every issuer. Returns the anchor's subject.
+fn self_issued(c: &Certificate) -> bool {
+    c.tbs_certificate.subject == c.tbs_certificate.issuer
+}
+
+/// Extensions every certificate of the path must pass: no duplicates, no unhandled critical extension, and the
+/// handled ones decodable.
+fn check_extensions(c: &Certificate) -> Result<(), String> {
+    let exts = c.tbs_certificate.extensions.as_deref().unwrap_or_default();
+    for (i, e) in exts.iter().enumerate() {
+        if exts[..i].iter().any(|p| p.extn_id == e.extn_id) {
+            return Err(format!(
+                "certificate {} has the extension {} twice",
+                subject(c),
+                e.extn_id
+            ));
+        }
+        if e.critical && !HANDLED_CRITICAL.iter().any(|h| e.extn_id == oid(h)) {
+            return Err(format!(
+                "certificate {} has an unsupported critical extension {} (not evaluated: rejected)",
+                subject(c),
+                e.extn_id
+            ));
+        }
+    }
+    use x509_cert::ext::pkix::{
+        BasicConstraints, ExtendedKeyUsage, KeyUsage, SubjectAltName, constraints::NameConstraints,
+    };
+    decode_ext::<BasicConstraints>(c, OID_EXT_BASIC_CONSTRAINTS, "basicConstraints")?;
+    decode_ext::<KeyUsage>(c, OID_EXT_KEY_USAGE, "keyUsage")?;
+    decode_ext::<ExtendedKeyUsage>(c, OID_EXT_EKU, "extendedKeyUsage")?;
+    decode_ext::<NameConstraints>(c, OID_EXT_NAME_CONSTRAINTS, "nameConstraints")?;
+    decode_ext::<SubjectAltName>(c, OID_EXT_SAN, "subjectAltName")?;
+    Ok(())
+}
+
+/// RFC 5280 §7.1 comparison of one attribute value: string types case-folded, whitespace trimmed and
+/// collapsed; other types byte for byte.
+fn attr_value_key(v: &Any) -> Vec<u8> {
+    let raw = v.value();
+    let text = match u8::from(der::Tagged::tag(v)) {
+        0x0c | 0x13 | 0x16 | 0x14 => String::from_utf8(raw.to_vec()).ok(),
+        0x1e if raw.len() & 1 == 0 => String::from_utf16(
+            &raw.chunks(2)
+                .map(|p| u16::from_be_bytes([p[0], p[1]]))
+                .collect::<Vec<_>>(),
+        )
+        .ok(),
+        _ => None,
+    };
+    match text {
+        Some(t) => {
+            let mut k = vec![b's'];
+            k.extend(
+                t.split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .to_lowercase()
+                    .into_bytes(),
+            );
+            k
+        }
+        None => {
+            let mut k = vec![b'b'];
+            k.extend(v.to_der().unwrap_or_default());
+            k
+        }
+    }
+}
+
+fn rdn_key(rdn: &x509_cert::name::RelativeDistinguishedName) -> Vec<(String, Vec<u8>)> {
+    let mut k: Vec<_> = rdn
+        .0
+        .iter()
+        .map(|a| (a.oid.to_string(), attr_value_key(&a.value)))
+        .collect();
+    k.sort();
+    k
+}
+
+/// `name` is within the directoryName subtree `base`: base's RDNs are a prefix of name's.
+fn dn_within(name: &x509_cert::name::Name, base: &x509_cert::name::Name) -> bool {
+    base.0.len() <= name.0.len()
+        && base
+            .0
+            .iter()
+            .zip(name.0.iter())
+            .all(|(b, n)| rdn_key(b) == rdn_key(n))
+}
+
+fn general_name_kind(g: &x509_cert::ext::pkix::name::GeneralName) -> &'static str {
+    use x509_cert::ext::pkix::name::GeneralName as G;
+    match g {
+        G::OtherName(_) => "otherName",
+        G::Rfc822Name(_) => "rfc822Name",
+        G::DnsName(_) => "dNSName",
+        G::DirectoryName(_) => "directoryName",
+        G::EdiPartyName(_) => "ediPartyName",
+        G::UniformResourceIdentifier(_) => "uniformResourceIdentifier",
+        G::IpAddress(_) => "iPAddress",
+        G::RegisteredId(_) => "registeredID",
+    }
+}
+
+/// Checks the names of `c` against the nameConstraints `nc` of `issuer`.
+fn check_names(
+    c: &Certificate,
+    issuer: &Certificate,
+    nc: &x509_cert::ext::pkix::constraints::NameConstraints,
+) -> Result<(), String> {
+    use x509_cert::ext::pkix::SubjectAltName;
+    use x509_cert::ext::pkix::name::GeneralName as G;
+    let sans: Vec<G> = decode_ext::<SubjectAltName>(c, OID_EXT_SAN, "subjectAltName")?
+        .map(|(s, _)| s.0)
+        .unwrap_or_default();
+    let mut dns: Vec<&x509_cert::name::Name> = Vec::new();
+    if !c.tbs_certificate.subject.0.is_empty() {
+        dns.push(&c.tbs_certificate.subject);
+    }
+    for s in &sans {
+        if let G::DirectoryName(n) = s {
+            dns.push(n);
+        }
+    }
+    let has_email_attr = c
+        .tbs_certificate
+        .subject
+        .0
+        .iter()
+        .any(|r| r.0.iter().any(|a| a.oid == oid(OID_EMAIL_ADDRESS)));
+    let permitted = nc.permitted_subtrees.as_deref().unwrap_or_default();
+    let excluded = nc.excluded_subtrees.as_deref().unwrap_or_default();
+    let violation = |how: &str| {
+        Err(format!(
+            "certificate {} violates the name constraints of {} ({})",
+            subject(c),
+            subject(issuer),
+            how
+        ))
+    };
+    for st in permitted.iter().chain(excluded) {
+        if st.minimum != 0 || st.maximum.is_some() {
+            return Err(format!(
+                "the name constraints of {} use minimum/maximum, which cannot be evaluated (rejected)",
+                subject(issuer)
+            ));
+        }
+        let kind = general_name_kind(&st.base);
+        if kind == "directoryName" {
+            continue;
+        }
+        let carries = sans.iter().any(|s| general_name_kind(s) == kind)
+            || (kind == "rfc822Name" && has_email_attr);
+        if carries {
+            return Err(format!(
+                "the {} name constraints of {} cannot be evaluated for {}, which has {} names (rejected)",
+                kind,
+                subject(issuer),
+                subject(c),
+                kind
+            ));
+        }
+    }
+    let permitted_dn: Vec<&x509_cert::name::Name> = permitted
+        .iter()
+        .filter_map(|s| match &s.base {
+            G::DirectoryName(n) => Some(n),
+            _ => None,
+        })
+        .collect();
+    for name in &dns {
+        if !permitted_dn.is_empty() && !permitted_dn.iter().any(|b| dn_within(name, b)) {
+            return violation(&format!("{} is outside the permitted subtrees", name));
+        }
+        let excluded_dn = excluded.iter().filter_map(|s| match &s.base {
+            G::DirectoryName(n) => Some(n),
+            _ => None,
+        });
+        for b in excluded_dn {
+            if dn_within(name, b) {
+                return violation(&format!("{} is inside the excluded subtree {}", name, b));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Path constraints of a complete candidate path: `path[0]` is the TSA certificate, the last one the anchor.
+fn check_path(path: &[&Certificate]) -> Result<(), String> {
+    use x509_cert::ext::pkix::{
+        BasicConstraints, ExtendedKeyUsage, KeyUsage, constraints::NameConstraints,
+    };
+    let n = path.len();
+    for (j, c) in path.iter().enumerate().skip(1) {
+        let is_anchor = j == n - 1;
+        let bc = decode_ext::<BasicConstraints>(c, OID_EXT_BASIC_CONSTRAINTS, "basicConstraints")?;
+        let ku = decode_ext::<KeyUsage>(c, OID_EXT_KEY_USAGE, "keyUsage")?;
+        match &bc {
+            Some((b, _)) if b.ca => {}
+            Some(_) => {
+                return Err(format!(
+                    "certificate {} is not a CA (basicConstraints cA is false) but issued {}",
+                    subject(c),
+                    subject(path[j - 1])
+                ));
+            }
+            None => {
+                let v1 = c.tbs_certificate.version == x509_cert::certificate::Version::V1
+                    && c.tbs_certificate.extensions.is_none();
+                let cert_sign = ku.as_ref().is_some_and(|(k, _)| k.key_cert_sign());
+                if !(is_anchor && (v1 || cert_sign)) {
+                    return Err(format!(
+                        "certificate {} is not a CA (no basicConstraints) but issued {}",
+                        subject(c),
+                        subject(path[j - 1])
+                    ));
+                }
+            }
+        }
+        if ku.as_ref().is_some_and(|(k, _)| !k.key_cert_sign()) {
+            return Err(format!(
+                "certificate {} may not sign certificates (its keyUsage lacks keyCertSign)",
+                subject(c)
+            ));
+        }
+        if let Some(max) = bc.as_ref().and_then(|(b, _)| b.path_len_constraint) {
+            let below = path[1..j].iter().filter(|x| !self_issued(x)).count();
+            if below > max as usize {
+                return Err(format!(
+                    "certificate {} allows {} intermediate CA certificate(s) below it (pathLenConstraint), the path has {}",
+                    subject(c),
+                    max,
+                    below
+                ));
+            }
+        }
+        let ca_eku = decode_ext::<ExtendedKeyUsage>(c, OID_EXT_EKU, "extendedKeyUsage")?;
+        if ca_eku.is_some_and(|(eku, critical)| {
+            critical
+                && !eku
+                    .0
+                    .iter()
+                    .any(|p| *p == oid(OID_KP_TIME_STAMPING) || *p == oid(OID_ANY_EKU))
+        }) {
+            return Err(format!(
+                "certificate {} has a critical extended key usage without timeStamping",
+                subject(c)
+            ));
+        }
+        if let Some((nc, _)) =
+            decode_ext::<NameConstraints>(c, OID_EXT_NAME_CONSTRAINTS, "nameConstraints")?
+        {
+            for (k, below) in path[..j].iter().enumerate() {
+                if k > 0 && self_issued(below) {
+                    continue;
+                }
+                check_names(below, c, &nc)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Depth-first search for a valid path (see the section comment above).
+struct PathSearch<'a> {
+    token: &'a [Certificate],
+    anchors: &'a [Certificate],
+    anchor_ders: Vec<Vec<u8>>,
+    at: u64,
+    tried: usize,
+    first_problem: Option<String>,
+    deepest: String,
+}
+
+impl<'a> PathSearch<'a> {
+    fn note(&mut self, problem: String) {
+        self.first_problem.get_or_insert(problem);
+    }
+
+    fn budget(&mut self) -> bool {
+        self.tried += 1;
+        if self.tried > MAX_CANDIDATES {
+            self.note(format!(
+                "more than {MAX_CANDIDATES} candidate issuers (search stopped)"
+            ));
+            return false;
+        }
+        true
+    }
+
+    fn extend(
+        &mut self,
+        path: &mut Vec<&'a Certificate>,
+        ders: &mut Vec<Vec<u8>>,
+    ) -> Option<String> {
+        let cur = *path.last()?;
+        if let Err(e) = check_validity(cur, self.at).and_then(|_| check_extensions(cur)) {
+            self.note(e);
+            return None;
+        }
+        self.deepest = subject(cur);
+        if self.anchor_ders.contains(ders.last()?) {
+            // The certificate itself is in the bundle: the path ends here.
+            return match check_path(path) {
+                Ok(()) => Some(subject(cur)),
+                Err(e) => {
+                    self.note(e);
+                    None
+                }
+            };
+        }
+        for a in self.anchors {
+            if a.tbs_certificate.subject != cur.tbs_certificate.issuer {
+                continue;
+            }
+            let Ok(a_der) = a.to_der() else { continue };
+            if ders.contains(&a_der) {
+                continue;
+            }
+            if !self.budget() {
+                return None;
+            }
+            if !signed_by(cur, a) {
+                continue;
+            }
+            if let Err(e) = check_validity(a, self.at).and_then(|_| check_extensions(a)) {
+                self.note(e);
+                continue;
+            }
+            path.push(a);
+            let r = check_path(path);
+            path.pop();
+            match r {
+                Ok(()) => return Some(subject(a)),
+                Err(e) => self.note(e),
+            }
+        }
+        let has_issuer_in_token = self
+            .token
+            .iter()
+            .any(|c| c.tbs_certificate.subject == cur.tbs_certificate.issuer);
+        if path.len() >= MAX_PATH {
+            if has_issuer_in_token {
+                self.note(format!(
+                    "TSA certificate chain too long (more than {MAX_PATH} certificates below the trust anchor)"
+                ));
+            }
+            return None;
+        }
+        for c in self.token {
+            if c.tbs_certificate.subject != cur.tbs_certificate.issuer {
+                continue;
+            }
+            let Ok(c_der) = c.to_der() else { continue };
+            if ders.contains(&c_der) {
+                continue;
+            }
+            if !self.budget() {
+                return None;
+            }
+            if !signed_by(cur, c) {
+                continue;
+            }
+            path.push(c);
+            ders.push(c_der);
+            if let Some(anchor) = self.extend(path, ders) {
+                return Some(anchor);
+            }
+            path.pop();
+            ders.pop();
+        }
+        None
+    }
+}
+
+/// Builds and checks a path from the TSA certificate to one of `anchors` at genTime (see the section comment
+/// above for what is and is not checked). Returns the anchor's subject.
 fn validate_chain(
     leaf: &Certificate,
     token_certs: &[Certificate],
     anchors: &[Certificate],
     gen_time: &str,
 ) -> Result<String, String> {
-    let at = unix_of(gen_time)?;
-    let anchor_ders: Vec<Vec<u8>> = anchors.iter().filter_map(|a| a.to_der().ok()).collect();
-    let mut cur = leaf.clone();
-    for _ in 0..8 {
-        check_validity(&cur, at)?;
-        let cur_der = cur.to_der().map_err(|e| e.to_string())?;
-        if anchor_ders.contains(&cur_der) {
-            return Ok(subject(&cur));
-        }
-        if let Some(a) = anchors
-            .iter()
-            .find(|a| a.tbs_certificate.subject == cur.tbs_certificate.issuer && signed_by(&cur, a))
-        {
-            check_validity(a, at)?;
-            return Ok(subject(a));
-        }
-        let next = token_certs
-            .iter()
-            .find(|c| {
-                c.tbs_certificate.subject == cur.tbs_certificate.issuer
-                    && c.tbs_certificate.subject != cur.tbs_certificate.subject
-                    && is_ca(c)
-                    && signed_by(&cur, c)
-            })
-            .cloned();
-        match next {
-            Some(n) => cur = n,
-            None => {
-                return Err(format!(
-                    "TSA certificate chain not validated: no trusted issuer for {} in the CA bundle",
-                    subject(&cur)
-                ));
-            }
-        }
+    let mut search = PathSearch {
+        token: token_certs,
+        anchors,
+        anchor_ders: anchors.iter().filter_map(|a| a.to_der().ok()).collect(),
+        at: unix_of(gen_time)?,
+        tried: 0,
+        first_problem: None,
+        deepest: subject(leaf),
+    };
+    let leaf_der = leaf.to_der().map_err(|e| e.to_string())?;
+    if let Some(anchor) = search.extend(&mut vec![leaf], &mut vec![leaf_der]) {
+        return Ok(anchor);
     }
-    Err("TSA certificate chain too long".into())
+    Err(match search.first_problem {
+        Some(p) => format!("TSA certificate chain not validated: {p}"),
+        None => format!(
+            "TSA certificate chain not validated: no trusted issuer for {} in the CA bundle",
+            search.deepest
+        ),
+    })
 }
 
 /// Reads a CA bundle for `--tsa-ca`: PEM (one or more certificates) or a single DER certificate.
@@ -841,5 +1425,129 @@ mod tests {
         assert!(load_ca_bundle(&dir.path().join("empty.pem")).is_err());
         assert_eq!(md_of(&oid(OID_SHA256)), Some(Md::Sha256));
         assert!(sig_md(&oid("1.2.840.10045.4.3.2"), Some(Md::Sha256)).is_err());
+    }
+
+    /// Review (sidecar bypass): the tokens are driven by the audit log's timestamp_obtained entries, so deleting
+    /// a metadata file, pointing an entry outside the log folder or leaving an unexplained token is a problem.
+    #[test]
+    fn recorded_tokens_fail_closed_without_their_files() {
+        let d = tempfile::tempdir().unwrap();
+        let mut log = crate::audit::AuditLog::create(d.path(), "RUN-1", "t").unwrap();
+        log.record("step", None, json!({})).unwrap();
+        let tsr = b"not a real token";
+        let sha = hash_bytes(tsr, HashAlgo::Sha256);
+        log.record(
+            "timestamp_obtained",
+            Some("timestamp-00001.tsr"),
+            json!({"file": "timestamp-00001.tsr", "token_sha256": sha, "covers_seq": 1,
+                   "tsa": "t", "gen_time": "2026-01-01T00:00:00Z"}),
+        )
+        .unwrap();
+        log.record(
+            "timestamp_obtained",
+            None,
+            json!({"file": "../outside.tsr", "token_sha256": sha, "covers_seq": 1}),
+        )
+        .unwrap();
+        let audit = d.path().join("audit.jsonl");
+        // .tsr and metadata both missing.
+        let p = verify_timestamps(&audit);
+        assert!(
+            p.iter().any(|x| x.contains(
+                "entry #2 records timestamp token timestamp-00001.tsr, which is missing or altered"
+            )),
+            "{p:?}"
+        );
+        assert!(
+            p.iter()
+                .any(|x| x.contains("entry #3") && x.contains("not a token file name")),
+            "{p:?}"
+        );
+        // .tsr back, metadata still missing: a problem, and the token is still checked.
+        std::fs::write(d.path().join("timestamp-00001.tsr"), tsr).unwrap();
+        let v = verify_timestamps_with(&audit, None);
+        assert!(
+            v.problems
+                .iter()
+                .any(|x| x.contains("metadata timestamp-00001.json is missing")),
+            "{:?}",
+            v.problems
+        );
+        assert!(
+            v.problems
+                .iter()
+                .any(|x| x.starts_with("timestamp-00001.tsr: not a time-stamp response")),
+            "{:?}",
+            v.problems
+        );
+        assert_eq!(v.covers, vec![(1, "timestamp-00001.tsr".to_string())]);
+        // Metadata that disagrees with the entry.
+        let meta = json!({"file": "timestamp-00001.tsr", "token_sha256": sha, "covers_seq": 2});
+        std::fs::write(d.path().join("timestamp-00001.json"), meta.to_string()).unwrap();
+        assert!(
+            verify_timestamps(&audit)
+                .iter()
+                .any(|x| x.contains("does not match entry #2"))
+        );
+        // A token nothing records.
+        std::fs::write(d.path().join("timestamp-00009.tsr"), tsr).unwrap();
+        assert!(
+            verify_timestamps(&audit)
+                .iter()
+                .any(|x| x.starts_with("timestamp-00009.tsr: a timestamp token that neither"))
+        );
+        assert!(is_token_name("timestamp-0003.tsr"));
+        for bad in [
+            "../timestamp-1.tsr",
+            "timestamp-1.json",
+            "timestamp-a/b.tsr",
+            "x.tsr",
+            "timestamp-..tsr",
+        ] {
+            assert!(!is_token_name(bad), "{bad}");
+        }
+    }
+
+    /// tests/fixtures/tsa-chains (made by make_chains.py, cross-checked with `openssl verify -purpose
+    /// timestampsign`): every case reaches its expected verdict, and agrees with OpenSSL's unless the case
+    /// documents why the tool is deliberately stricter (or, for path building, more thorough).
+    #[test]
+    fn chain_fixtures_match_expected_and_openssl() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/tsa-chains");
+        let expected: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("expected.json")).unwrap())
+                .unwrap();
+        let gen_time = expected["gen_time"].as_str().unwrap();
+        let cases = expected["cases"].as_object().unwrap();
+        assert!(cases.len() >= 30, "{}", cases.len());
+        let mut wrong = Vec::new();
+        for (name, case) in cases {
+            let d = dir.join("cases").join(name);
+            let leaf = load_ca_bundle(&d.join("leaf.pem")).unwrap().remove(0);
+            let chain = if d.join("chain.pem").exists() {
+                load_ca_bundle(&d.join("chain.pem")).unwrap()
+            } else {
+                Vec::new()
+            };
+            let anchors = load_ca_bundle(&d.join("anchors.pem")).unwrap();
+            let got = check_tsa_eku(&leaf)
+                .and_then(|_| validate_chain(&leaf, &chain, &anchors, gen_time));
+            let want = case["expect"].as_str().unwrap();
+            let ok = match &got {
+                Ok(_) => want == "ok",
+                Err(e) => want != "ok" && e.contains(want),
+            };
+            if !ok {
+                wrong.push(format!("{name}: want {want:?}, got {got:?}"));
+            }
+            let openssl_ok = case["openssl"] == "ok";
+            if (want == "ok") != openssl_ok && case.get("deliberate_difference").is_none() {
+                wrong.push(format!(
+                    "{name}: disagrees with OpenSSL ({})",
+                    case["openssl"]
+                ));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
 }

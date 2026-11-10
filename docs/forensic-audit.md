@@ -101,10 +101,15 @@ sequenceDiagram
   message imprint of the request (hash algorithm SHA-256); it is not hashed a second time.
 - `verify-log` checks each token: imprint = stored head, and entry `#N` still exists with that hash (a missing
   entry `#N` is reported as truncation), and the TSA's CMS signature (ESS signing-certificate, message digest,
-  RSA signature, `timeStamping` key usage); `verify-case` does the same for every run.
+  RSA signature, critical `timeStamping`-only key usage); `verify-case` does the same for every run. The tokens
+  come from the log's `timestamp_obtained` entries: a recorded token whose `.tsr` or `.json` is missing is a
+  problem, never a skipped check.
 - The TSA certificate chain is validated only with `verify-log --tsa-ca <CA bundle>` (at genTime); without it
   the output says "chain not checked". Revocation is never checked.
-- Independent check: `openssl ts -verify -digest <head> -in timestamp-<N>.tsr -CAfile <TSA chain>`.
+- Independent signature/chain check: `openssl ts -verify -digest <head> -in timestamp-<N>.tsr -CAfile <TSA chain>`.
+  It does not check revocation (no CRL supplied, no OCSP query): establish the TSA certificate's revocation
+  status separately from CRL/OCSP evidence covering genTime (`rv-certcheck analyze --crl/--ocsp`, or `openssl
+  verify -crl_check -CRLfile <crl> -attime <genTime-epoch> …`).
 - `--no-timestamp` (or `RV_NO_TIMESTAMP=1`) disables it; tests use a local TSA (`tests/fake_tsa.py`).
 - **Limitation:** a timestamp shows the log existed at that time; it does not prove that its content is true.
 - This timestamp concerns the **audit log**. Timestamp tokens found among the evidence are verified separately by

@@ -923,7 +923,7 @@ pub fn verify_case(dir: &Path) -> CaseVerification {
                 .problems
                 .push(format!("run {}: audit.jsonl has no case_linked entry", rid)),
         }
-        for p in crate::trust::verify_timestamps(&log_dir, &audit::heads(&audit_path)) {
+        for p in crate::trust::verify_timestamps(&audit_path) {
             v.problems.push(format!("run {}: {}", rid, p));
         }
         let Some(fin) = fin else {

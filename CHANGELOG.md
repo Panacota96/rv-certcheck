@@ -31,6 +31,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 ## [Unreleased]
 
 ### Fixed
+- Timestamp verification (`verify-log`, `verify-case`) is driven by the audit log's `timestamp_obtained`
+  entries: deleting a token's `timestamp-<SEQ>.json` no longer skips its signature and chain checks (with `--tsa-ca`
+  an untrusted TSA passed that way). A recorded token whose `.tsr` or `.json` is missing, or whose metadata disagrees
+  with the entry, is a problem (exit 3); a token file that nothing records is checked too, or is a problem when it
+  cannot be.
+- The TSA certificate's extended key usage must be critical and contain only `id-kp-timeStamping` (RFC 3161 §2.3),
+  as in rv-certcheck.
+- `--tsa-ca` path validation enforces `pathLenConstraint` (anchor included, self-issued certificates not counted),
+  `keyCertSign` for issuers with keyUsage, directoryName name constraints, and rejects unsupported critical
+  extensions on any certificate of the path (policy processing and other name forms are not implemented: such
+  chains fail closed). Path building tries every candidate issuer and anchor (cross-signed intermediates, renewed
+  anchors, self-issued key-rollover intermediates), at most 8 certificates deep, without loops. Tested against 34
+  fixture chains cross-checked with `openssl verify -purpose timestampsign` (`tests/fixtures/tsa-chains`).
+- Docs: the `openssl ts -verify` cross-check is labelled a signature/chain check; revocation of the TSA certificate
+  is never checked by the tool and must be established from CRL/OCSP evidence covering genTime.
 - `verify-log` and `verify-case` now verify the TSA's CMS signature on every RFC 3161 token (signer certificate
   in the token, ESS signing-certificate binding, message digest over TSTInfo, RSA PKCS#1 v1.5 signature,
   `timeStamping` key usage); before, a token with an altered signature was reported intact. `verify-log --tsa-ca
