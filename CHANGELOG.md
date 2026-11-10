@@ -5,6 +5,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Entries are generated from
 [Conventional Commits](https://www.conventionalcommits.org/) by release-please and reviewed by a human.
 
+## [0.2.2](https://github.com/Panacota96/rv-certcheck/compare/v0.2.1...v0.2.2) (2026-11-10)
+
+
+### Bug Fixes
+
+* **certs:** match the point at infinity exactly so Ed25519 keys starting 0x00 are accepted ([94b5443](https://github.com/Panacota96/rv-certcheck/commit/94b54436c8800c8a51e8eddcf703f637e7dc71a3))
+* **security:** patch dependency advisories, blind RSA signing, check advisories in CI ([2756a2c](https://github.com/Panacota96/rv-certcheck/commit/2756a2cc8873e88dae299e7ad99f59d61da2028c))
+* **security:** patch dependency advisories, blind RSA signing, check advisories in CI ([2b27e90](https://github.com/Panacota96/rv-certcheck/commit/2b27e9044fc6de25dd3cc260c6e0454d53c0d456))
+
 ## [0.2.1](https://github.com/Panacota96/rv-certcheck/compare/v0.2.0...v0.2.1) (2026-11-10)
 
 
