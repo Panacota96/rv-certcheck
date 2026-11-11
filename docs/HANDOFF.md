@@ -22,7 +22,7 @@ flowchart LR
 | Toolchain | Rust pinned in `rust-toolchain.toml`; `rust-version` = 1.88 (minimum) |
 | CI | `ci.yml`: Linux + Windows tests, fmt, clippy `-D warnings`, `cargo deny check advisories licenses bans sources`, docs drift |
 | Releases | signed with the internal Rakvor code-signing certificate; the chain ends at "Rakvor Internal Code Signing Root CA", SHA-256 `DC:9B:A1:A2:FC:D4:F0:63:3C:52:14:B7:CC:EB:25:BE:D8:F3:F7:D9:EB:AF:11:15:90:25:0C:BC:AA:83:DF:60`, valid to 2036-10-20 |
-| Forge | the contract this repository follows and its validator live in [rakvor-tool-forge](https://github.com/Panacota96/rakvor-tool-forge) (current: v1.2.1, `168f10d`) |
+| Forge | the contract this repository follows and its validator live in [rakvor-tool-forge](https://github.com/Panacota96/rakvor-tool-forge) (the pinned version is listed in its README, "Using a pinned commit") |
 
 ## 2. Where things are
 
