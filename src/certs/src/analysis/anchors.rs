@@ -8,7 +8,9 @@
 use super::parse::pkcs7_contents;
 use super::util::*;
 use crate::model::*;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(not(windows))]
+use std::path::PathBuf;
 
 pub fn resolve_anchors(
     specs: &[AnchorSpec],

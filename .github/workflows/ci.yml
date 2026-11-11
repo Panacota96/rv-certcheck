@@ -49,6 +49,9 @@ jobs:
       - name: Rust toolchain pinned in rust-toolchain.toml (channel and components)
         run: rustup toolchain install && rustc --version
       - uses: Swatinem/rust-cache@v2
+      - name: Clippy on Windows (the lint job runs on Linux and never compiles #[cfg(windows)] code)
+        if: runner.os == 'Windows'
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Strawberry Perl for the vendored OpenSSL build (Git Bash's perl cannot configure OpenSSL for MSVC; no NASM needed, openssl-src builds no-asm without it)
         if: runner.os == 'Windows'
         shell: pwsh
