@@ -10,13 +10,18 @@ fn installer() -> String {
 /// The installer identity of every Rakvor tool. Two installers with the same AppId upgrade or uninstall each
 /// other (rv-imgauth 0.2.0 shipped with rv-pdfauth's). A new tool adds its AppId here, in every tool repo.
 const THIS_TOOL: &str = "rv-certcheck";
-const RAKVOR_APP_IDS: [(&str, &str); 6] = [
+const RAKVOR_APP_IDS: [(&str, &str); 11] = [
     ("rv-hashinv", "6D3F3B0E-5B7A-4B2C-9E61-2A1C7D4E9F10"),
     ("rv-pdfauth", "B2454915-B966-44CD-9C5B-5413F38185AE"),
     ("rv-rsmf", "7E0DA535-8638-4E9D-8680-ED046DCA9F45"),
     ("rv-imgauth", "04A0C3C3-4929-42ED-81F7-93DB361940C8"),
     ("rv-hub", "703D49A5-7B83-4C62-A97F-ED13C341CC23"),
     ("rv-certcheck", "32343DE5-B0E4-4454-8A42-A5CF82EEC9BF"),
+    ("rv-mailauth", "0D5428B0-B438-4B0F-804F-C48582CC8A7B"),
+    ("rv-timeline", "BE690C03-DA5F-42F0-9284-A86D5FF89D0E"),
+    ("rv-triage", "EED6D788-369E-4217-B0D7-83E4D8A93196"),
+    ("rv-report", "D943D333-1B25-4E70-B3FC-2256DADA9F4B"),
+    ("rv-avauth", "60B92A10-F369-4876-88D0-728ADD924167"),
 ];
 
 #[test]
