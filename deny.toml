@@ -22,6 +22,8 @@ allow = [
     "MPL-2.0",
     "CDLA-Permissive-2.0",
     "0BSD",
+    # jpeg-encoder (re-encoding for ELA and JPEG ghosts): permissive; requires the IJG acknowledgement in NOTICE.
+    "IJG",
 ]
 # The workspace's own crates carry the proprietary licence (LICENSE).
 [licenses.private]
