@@ -344,7 +344,7 @@ rv-certcheck verify-log D:\cases\CASE-2026-014\runs\rv-certcheck\20261021T154339
 # OK  25 entries, chain intact: …\audit.jsonl
 #     timestamp 2026-10-21T15:43:40Z by http://127.0.0.1:33481/tsr covers entry #22
 #     truncation: the final entry #25 is anchored by the case log (run_finished)
-#     outputs: 38 verified of 38 recorded (md5, sha256)
+#     outputs: 38 verified of 39 recorded (md5, sha256), 1 skipped
 #     not re-hashed: logs/timestamp-00022.tsr (RFC 3161 token: checked by the timestamp verification)
 ```
 
