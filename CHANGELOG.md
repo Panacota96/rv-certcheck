@@ -5,6 +5,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Entries are generated from
 [Conventional Commits](https://www.conventionalcommits.org/) by release-please and reviewed by a human.
 
+## [0.2.3](https://github.com/Panacota96/rv-certcheck/compare/v0.2.2...v0.2.3) (2026-11-14)
+
+
+### Bug Fixes
+
+* **core:** late audit entries and redirected run folders cannot hide an edited output ([fd1d481](https://github.com/Panacota96/rv-certcheck/commit/fd1d4815ccf3c3e2e6450e1de6c4e93693194f58))
+* verify-log and verify-case re-hash the outputs the audit log records ([33ca633](https://github.com/Panacota96/rv-certcheck/commit/33ca633b6319cf80329f725055da58d0f4117676))
+* **verify:** re-hash the outputs a run's audit log records ([a0c0043](https://github.com/Panacota96/rv-certcheck/commit/a0c004378e514261c4ea3377fd4d2c5578300b77))
+
 ## [0.2.2](https://github.com/Panacota96/rv-certcheck/compare/v0.2.1...v0.2.2) (2026-11-10)
 
 
