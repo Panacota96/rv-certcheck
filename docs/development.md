@@ -20,7 +20,7 @@ binaries are linked with the static C runtime (`.cargo/config.toml`), so they ru
 flowchart BT
     U["Unit tests (core)<br/>known-answer hashes · chain tamper · i18n keys · PDF · wrapping"] --> I
     I["Integration tests (CLI binary)<br/>help sections · exit codes · bulk run · verify-log · evidence untouched · docs drift"] --> X
-    X["Cross-language check<br/>tests/verify_chain.py re-verifies the chain and the hashes with Python"] --> M
+    X["Cross-language check<br/>tests/verify_chain.py re-verifies the chain, the hashes<br/>and the recorded outputs with Python"] --> M
     M["Manual release check<br/>Windows 10 VM + Windows 11: install, GUI run, open report"]
 ```
 

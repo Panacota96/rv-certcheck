@@ -171,7 +171,8 @@ flowchart TB
    `rv-certcheck verify-log <CASE>/runs/<tool>/<RUN-ID>/logs` checks one run and anchors its end to `run_finished` in
    the case log.
 2. Independently of any Rakvor binary: `python tests/verify_chain.py <CASE>/runs/<tool>/<RUN-ID>/logs` re-checks a
-   run; the case log uses the same chain rule, and `sha256sum evidence/registry.json` must equal the last
+   run (chain, hash register and every output its audit log records); the case log uses the same chain rule, and
+   `sha256sum evidence/registry.json` must equal the last
    `registry_sha256` in `case-log.jsonl`.
 3. Re-hash the evidence with any tool and compare it with `evidence/registry.csv` (or `verify-case --rehash`).
 4. `python tests/validate_reports.py <CASE>` validates `case.json`, `registry.json` and every JSON report against

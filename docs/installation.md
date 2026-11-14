@@ -265,7 +265,8 @@ Expected summary: **13 items, 0 errors, findings high 4, medium 4, low 0, info 9
 size, SHA-256 and MD5 of every file with `expected_hashes.csv`, print
 `hashes.csv matches expected_hashes.csv (13 files: size, SHA-256, MD5)` and exit 3 on any difference. For the
 installer (no script installed), compare `expected_hashes.csv` with `$out\logs\<RUN-ID>\hashes.csv`, or run
-`python tests\verify_chain.py <log folder>` from the source tree, which re-hashes every file of `hashes.csv`.
+`python tests\verify_chain.py <log folder>` from the source tree, which re-hashes every file of `hashes.csv` and every
+output the audit log records.
 <!-- /forge:domain -->
 
 Keep the console output and the run folder as the record of this verification.
