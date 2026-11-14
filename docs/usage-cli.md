@@ -1876,7 +1876,16 @@ CHECKS:
     a case folder (<CASE>/runs/<TOOL>/<RUN-ID>/logs), end with the audit head that the case log
     recorded at run_finished (only timestamp_obtained may follow). Entries after the last
     anchored one are listed as not provable; with neither record the output says
-    "truncation not detectable without a timestamp or case record".
+    "truncation not detectable without a timestamp or case record";
+  - recorded outputs: every file the log says the run wrote (item reports, statistics,
+    hashes.csv, environment.json; a creation run's report.json and report.txt) is re-hashed
+    with each algorithm recorded and compared; the latest entry for a file wins. A missing,
+    edited or replaced file is a problem; a recorded path that is absolute, contains .. or
+    resolves outside the run folder (symlink, junction) is rejected and not read. Timestamp
+    tokens (checked above) and files a creation run wrote outside the run folder (keys,
+    certificates, CSRs, CA files: file_written) are listed as not re-hashed, with the reason;
+    a lab set (lab_set_written) is counted as unrecognised. Output: "outputs: N verified of
+    M recorded (algorithms)".
 
 EXAMPLES:
   rv-certcheck verify-log rakvor-out/logs/20261019T101500Z-a1b2c3/audit.jsonl
@@ -1885,11 +1894,15 @@ EXAMPLES:
   rv-certcheck verify-log rakvor-out/logs/20261019T101500Z-a1b2c3 --tsa-ca digicert-tsa-roots.pem
 
 EXIT CODES:
-  0  The chain is intact and agrees with its timestamps and case record (if any).
+  0  The chain is intact and agrees with its timestamps and case record (if any), and every
+     output file it records (reports, hashes.csv, environment.json) still has the recorded
+     digests.
   1  The log or the --tsa-ca file cannot be read.
   3  The chain is broken (an entry was edited, deleted or re-ordered), a timestamp does not
      match or does not verify (altered token, invalid TSA signature, chain not trusted by
-     --tsa-ca), or the log is shorter than its timestamp or case record says (truncated).
+     --tsa-ca), the log is shorter than its timestamp or case record says (truncated), or
+     a recorded output file was edited, deleted or replaced after the run (named in the
+     output; a recorded path that leads outside the run folder is rejected, not read).
 ```
 
 ## rv-certcheck self-test
@@ -1977,6 +1990,8 @@ CHECKS:
     tokens: imprint and TSA signature; the TSA chain is not checked, use verify-log
     --tsa-ca), its case_linked entry points to its run_started entry, and the audit head
     recorded at run_finished is its final entry (only timestamp_obtained may follow);
+  - every output file a run's audit log records (reports, hashes.csv, environment.json) is
+    re-hashed and compared with the recorded digests (edited, deleted or replaced: a problem);
   - with --rehash: every registered item still reachable at its registered path is read again
     and its digests are compared with the registry (the latest registration of a path).
 
@@ -1988,8 +2003,9 @@ EXIT CODES:
   0  The case folder is intact (warnings, e.g. a run still in progress or an item not
      reachable for --rehash, are printed).
   1  The folder is not a case folder (no case.json).
-  3  At least one check failed: the case was edited, truncated or re-ordered, or (--rehash)
-     an evidence file differs from the registry.
+  3  At least one check failed: the case was edited, truncated or re-ordered, a run's
+     recorded output (report, register) was edited, deleted or replaced, or (--rehash) an
+     evidence file differs from the registry.
 ```
 
 ## rv-certcheck describe

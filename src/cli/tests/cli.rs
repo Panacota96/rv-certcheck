@@ -237,6 +237,47 @@ fn bulk_scan_writes_reports_logs_and_verifiable_chain() {
         std::fs::write(&csv, saved).unwrap();
     }
 
+    // Every output the log records is re-hashed: an edited report or a deleted one is a problem (exit 3).
+    let ok = bin().arg("verify-log").arg(&logs).assert().code(0);
+    let text = String::from_utf8_lossy(&ok.get_output().stdout).into_owned();
+    let line = text
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("outputs: "))
+        .expect("outputs line");
+    let (verified, rest) = line.split_once(" verified of ").unwrap();
+    assert!(
+        rest.starts_with(&format!("{} recorded (blake3, sha256)", verified)),
+        "{}",
+        line
+    );
+    assert!(verified.parse::<u32>().unwrap() > 3 * 6, "{}", line);
+    let item = std::fs::read_dir(reports.join("items"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .into_owned();
+    let technical = reports.join("items").join(&item).join("technical.json");
+    let saved = std::fs::read(&technical).unwrap();
+    std::fs::write(&technical, b"{\"edited\": true}\n").unwrap();
+    let stats = reports.join("statistics.json");
+    std::fs::rename(&stats, out.path().join("moved.json")).unwrap();
+    bin().arg("verify-log").arg(&logs).assert().code(3).stdout(
+        predicate::str::contains(format!(
+            "output reports/items/{}/technical.json: blake3 differs from audit entry #",
+            item
+        ))
+        .and(predicate::str::contains(
+            "output reports/statistics.json: missing",
+        ))
+        .and(predicate::str::contains("1 missing, 1 changed")),
+    );
+    std::fs::write(&technical, saved).unwrap();
+    std::fs::rename(out.path().join("moved.json"), &stats).unwrap();
+    bin().arg("verify-log").arg(&logs).assert().code(0);
+
     // Tampering with one entry is detected.
     let p = logs.join("audit.jsonl");
     let text = std::fs::read_to_string(&p).unwrap();
@@ -762,15 +803,24 @@ fn case_folder_intake_verify_case_and_tampering() {
         .collect();
     assert!(custody_ids.iter().any(|c| c.contains("E0001")));
     let runs_before = if intake { 1 } else { 2 };
+    bin().arg("verify-case").arg(&case).assert().code(0).stdout(
+        predicate::str::contains(format!("3 registered items, {} runs verified", runs_before)).and(
+            predicate::str::is_match(r"outputs: [1-9]\d* verified of [1-9]\d* recorded").unwrap(),
+        ),
+    );
+    // verify-case re-hashes every run's recorded outputs: an edited report is named, exit 3.
+    let stats = run_dir.join("reports/statistics.json");
+    let saved = std::fs::read(&stats).unwrap();
+    std::fs::write(&stats, b"{}\n").unwrap();
     bin()
         .arg("verify-case")
         .arg(&case)
         .assert()
-        .code(0)
-        .stdout(predicate::str::contains(format!(
-            "3 registered items, {} runs verified",
-            runs_before
-        )));
+        .code(3)
+        .stdout(predicate::str::contains(
+            "output reports/statistics.json: md5 differs from audit entry #",
+        ));
+    std::fs::write(&stats, saved).unwrap();
     // The case id may be left out once the case exists; --evidence selects registered items.
     case_scan(&case)
         .args(["--evidence", "E0002"])
@@ -1055,6 +1105,26 @@ fn golden_case_from_the_other_profile_verifies() {
             .stdout(predicate::str::contains("truncated: the case log records"));
         bin().arg("verify-case").arg(&case).assert().code(3);
         std::fs::write(&audit, &full).unwrap();
+        // The golden run is another tool's (rv-hashinv): verify-case re-hashes its recorded outputs too, and an
+        // edited report of that run is named (exit 3).
+        bin().arg("verify-case").arg(&case).assert().code(0).stdout(
+            predicate::str::is_match(r"outputs: ([1-9]\d*) verified of ([1-9]\d*) recorded")
+                .unwrap(),
+        );
+        let item = only_dir(&logs.parent().unwrap().join("reports/items"));
+        let technical = item.join("technical.json");
+        let saved = std::fs::read(&technical).unwrap();
+        std::fs::write(&technical, b"{\"edited\": true}\n").unwrap();
+        bin()
+            .arg("verify-case")
+            .arg(&case)
+            .assert()
+            .code(3)
+            .stdout(predicate::str::contains(format!(
+                "output reports/items/{}/technical.json: ",
+                item.file_name().unwrap().to_string_lossy()
+            )));
+        std::fs::write(&technical, saved).unwrap();
         // verify-case checks each token against its timestamp_obtained entry: an altered signature value, even
         // with the digest in the metadata file updated to match, makes the case fail (the entry's digest differs).
         let tsr = std::fs::read_dir(&logs)

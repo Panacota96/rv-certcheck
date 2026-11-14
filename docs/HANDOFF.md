@@ -37,7 +37,9 @@ flowchart LR
 
 **Shared code.** `src/core/src/trust.rs` is byte-identical in rv-hub, rv-hashinv, rv-rsmf, rv-certcheck, rv-imgauth,
 rv-pdfauth and the forge template. Change it in all of them in one go (and `core/trust.py` of the forge's Python
-template, graded by the same fixtures). The installer AppId table in `src/cli/tests/packaging.rs` lists every
+template, graded by the same fixtures). `src/core/src/outputs.rs` (re-hash of the outputs an audit log records, used by
+`verify-log` and `verify-case`) is shared the same way: it depends only on `crate::hash` and `serde_json`; its module
+documentation lists every audit shape of every tool. The installer AppId table in `src/cli/tests/packaging.rs` lists every
 tool; a new tool's AppId goes into every repository's copy.
 
 ## 3. Everyday commands
@@ -83,6 +85,12 @@ variables or prompts and never logged; no GPL/AGPL/LGPL components; tools report
 - Root key ceremony on a hardware token (YubiKey, PKCS#11) is pending; the root private key is held offline by its owner and is never in this repository.
 - The licence (`LICENSE`) and the admissibility analysis (`docs/admissibility.md`) are drafts pending a lawyer's review (Colombia and France).
 - Revocation of the TSA certificate is never checked by the tools (gap G18): it is established separately from CRL/OCSP evidence covering genTime ([ADR 0002](adr/0002-tsa-token-verification.md)).
+- Recorded outputs (gap G19, closed here): `src/core/src/outputs.rs` (SHA-256 `673158d8…5b9f645f`, the copy in
+  rv-hashinv is the reference) re-hashes every output a run's audit log records, in `verify-log` and `verify-case`,
+  for analysis runs (`output_written` with `digest`, item and statistics reports) and creation runs
+  (`report_written`; `file_written` is listed as not re-hashed, `lab_set_written` counted as unrecognised). The CA
+  folder's own checks (`pki verify`, `issued.jsonl`) are unchanged. The forge's Python template (`core/verify.py`)
+  has no equivalent yet.
 - RUSTSEC-2023-0071 is a documented exception until a stable `cms` 0.3 (rsa 0.10) exists ([ADR 0003](adr/0003-dependency-advisories.md)).
 
 The gap table in [admissibility.md](admissibility.md) lists every known limitation with its owner (engineering,

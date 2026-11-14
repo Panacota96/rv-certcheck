@@ -855,6 +855,65 @@ fn verify_code(dir: &Path) -> Option<i32> {
         .code()
 }
 
+/// A creation run's own reports (report_written) are re-hashed by verify-log; the files it wrote at paths the
+/// operator chose (file_written: key, certificate, CA files) are listed as not re-hashed.
+#[test]
+fn creation_run_reports_are_rehashed_by_verify_log() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path();
+    small_root(dir);
+    let out = dir.join("rakvor-out");
+    let run = std::fs::read_dir(out.join("logs"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let id = run.file_name().unwrap().to_owned();
+    let o = bin(dir).arg("verify-log").arg(&run).output().unwrap();
+    let text = String::from_utf8_lossy(&o.stdout).into_owned();
+    assert_eq!(o.status.code(), Some(0), "{}", text);
+    assert!(
+        text.contains("outputs: 3 verified of ") && text.contains("(sha256)"),
+        "{}",
+        text
+    );
+    assert!(
+        text.contains("written outside the run folder, at a path the operator chose"),
+        "{}",
+        text
+    );
+    let reports = out.join("reports").join(&id);
+    let json = reports.join("report.json");
+    let saved = std::fs::read(&json).unwrap();
+    std::fs::write(&json, b"{\"edited\": true}\n").unwrap();
+    let txt = reports.join("report.txt");
+    let saved_txt = std::fs::read(&txt).unwrap();
+    std::fs::remove_file(&txt).unwrap();
+    let o = bin(dir).arg("verify-log").arg(&run).output().unwrap();
+    let text = String::from_utf8_lossy(&o.stdout).into_owned();
+    assert_eq!(o.status.code(), Some(3), "{}", text);
+    assert!(
+        text.contains("output reports/report.json: sha256 differs from audit entry #")
+            && text.contains("output reports/report.txt: missing")
+            && text.contains("1 missing, 1 changed"),
+        "{}",
+        text
+    );
+    std::fs::write(&json, saved).unwrap();
+    std::fs::write(&txt, saved_txt).unwrap();
+    assert_eq!(
+        bin(dir)
+            .arg("verify-log")
+            .arg(&run)
+            .output()
+            .unwrap()
+            .status
+            .code(),
+        Some(0)
+    );
+}
+
 #[test]
 fn ca_folder_tampering_exits_3_and_pki_set_keeps_it_verified() {
     let d = tempfile::tempdir().unwrap();

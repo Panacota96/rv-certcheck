@@ -20,6 +20,7 @@ pub mod events;
 pub mod hash;
 pub mod i18n;
 pub mod input;
+pub mod outputs;
 pub mod report;
 pub mod run;
 pub mod time;
