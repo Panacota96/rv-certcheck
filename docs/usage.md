@@ -108,7 +108,8 @@ rv-certcheck verify-case D:\cases\CASE-2026-014 --rehash
 ```
 
 Every Rakvor tool has `verify-case` and they agree. It checks the case-log chain, `case.json`, the registry digest,
-every run's audit chain and timestamp tokens, and the cross-links between the case log and each run
+every run's audit chain and timestamp tokens, every output file each run's audit log records (re-hashed; releases
+made before this check existed do not do it), and the cross-links between the case log and each run
 ([case-folder.md](case-folder.md#how-a-reviewer-verifies-a-case)). Exit 0 = intact (warnings printed), 3 = broken,
 1 = not a case folder. `--rehash` also re-reads every registered item still reachable at its registered path.
 
@@ -343,6 +344,8 @@ rv-certcheck verify-log D:\cases\CASE-2026-014\runs\rv-certcheck\20261021T154339
 # OK  25 entries, chain intact: …\audit.jsonl
 #     timestamp 2026-10-21T15:43:40Z by http://127.0.0.1:33481/tsr covers entry #22
 #     truncation: the final entry #25 is anchored by the case log (run_finished)
+#     outputs: 38 verified of 39 recorded (md5, sha256), 1 skipped
+#     not re-hashed: logs/timestamp-00022.tsr (RFC 3161 token: checked by the timestamp verification)
 ```
 
 The last line says what vouches for the length of the log. A standalone run with a timestamp prints
@@ -351,16 +354,35 @@ The last line says what vouches for the length of the log. A standalone run with
 a timestamp prints `truncation not detectable without a timestamp or case record`. A log shorter than its
 timestamp or case record is `BROKEN` (`truncated: …`, exit 3).
 
+The `outputs:` line is the re-hash of every file the log says the run wrote (each item's reports and
+`output_written` files, the statistics reports, `hashes.csv`, `environment.json`; for a creation run, `report.json`
+and `report.txt`), with every algorithm the log recorded; the latest entry for a file wins. A file edited, deleted
+or replaced after the run makes the run `BROKEN` (exit 3) and is named:
+
+```text
+BROKEN  …udit.jsonl
+  - output reports/statistics.json: sha256 differs from audit entry #37 (recorded e8ed…, now 73cb…): edited or replaced after the run
+  - output reports/items/00002-leaf.pem/technical.en.pdf: missing (recorded by audit entry #31): deleted or moved after the run
+    outputs: 36 verified of 38 recorded (sha256), 1 missing, 1 changed
+```
+
+A recorded path that is absolute, contains `..`, or resolves outside the run folder through a symlink or junction is
+rejected and never read. The timestamp token is listed as `not re-hashed` because the timestamp check above
+already verifies it; so are the files a creation run wrote at paths the operator chose (`file_written`: keys,
+certificates, CSRs, CA files; `pki verify` checks a CA folder). Files the run did not record are not checked.
+
 | Step | Command | Shows |
 | --- | --- | --- |
-| 1 | `rv-certcheck verify-log <log>` (exit 0 intact, 3 broken or truncated) | No entry edited, deleted or reordered; timestamp token matches the head it covers; the log still reaches the entry its timestamp covers and, in a case folder, the final entry recorded in the case log (the `truncation:` line names the anchor) |
+| 1 | `rv-certcheck verify-log <log>` (exit 0 intact, 3 broken, truncated or an output changed) | No entry edited, deleted or reordered; timestamp token matches the head it covers; the log still reaches the entry its timestamp covers and, in a case folder, the final entry recorded in the case log (the `truncation:` line names the anchor) |
 | 2 | `python tests/verify_chain.py <log>` (source tree) | Same, with an independent implementation; also re-hashes the evidence listed in `hashes.csv` |
 | 3 | OpenSSL ([Timestamps](#6-timestamps)) | The TSA signed that head at that time |
-| 4 | Script below | Every report file, `environment.json` and `hashes.csv` still has the digest recorded in the log |
-| 5 | `rv-certcheck verify-case <CASE> --rehash` | The run is the one the case log announced, complete up to its recorded final entry; the reachable evidence still matches the registry |
+| 4 | Step 1 (`outputs:` line); script below for an independent check | Every report file, `environment.json` and `hashes.csv` still has the digest recorded in the log |
+| 5 | `rv-certcheck verify-case <CASE> --rehash` | The run is the one the case log announced, complete up to its recorded final entry, with every recorded output unchanged; the reachable evidence still matches the registry |
 | 6 | `python tests/validate_reports.py <CASE or report folder>` | Every JSON report, `case.json` and `registry.json` match their schemas |
 
-Step 4 (no built-in command yet, gap G19) — re-hash every file the run recorded:
+Step 4 is built into `verify-log` and `verify-case`. To check it with code you can read in one screen (an
+independent implementation, e.g. for an opposing expert), re-hash every file the run recorded (item and
+statistics reports, registers; `output_written` files are left to step 1):
 
 ```bash
 python - "<log folder>" "<report folder>" <<'EOF'
@@ -400,8 +422,8 @@ SHA256).Hash.ToLower()` and search the value in `audit.jsonl`.
 | Command | 0 | 1 | 2 | 3 | 130 |
 | --- | --- | --- | --- | --- | --- |
 | `analyze` | done, no high finding | runtime error (input not found, output not writable, wrong certificate password, case log locked) | usage error (unknown option or algorithm, three algorithms, unknown language; with `--case-dir`: another case's folder, `--case` missing at creation, unknown evidence id) | done, ≥ 1 high finding; or the case folder fails verification (nothing written) | cancelled (Ctrl+C), partial reports written |
-| `verify-log` | intact | log unreadable | — | broken chain, token mismatch, or truncated (shorter than its timestamp or case record) | — |
-| `verify-case` | case intact (warnings printed) | not a case folder (no `case.json`) | — | at least one check failed (with `--rehash`: an evidence file differs from the registry) | — |
+| `verify-log` | intact | log unreadable | — | broken chain, token mismatch, truncated (shorter than its timestamp or case record), or a recorded output edited, deleted or replaced | — |
+| `verify-case` | case intact (warnings printed) | not a case folder (no `case.json`) | — | at least one check failed (a run's recorded output changed; with `--rehash`: an evidence file differs from the registry) | — |
 | `timestamp` | obtained and logged | TSA unreachable (nothing changed) | — | log missing, broken or unreadable (nothing added) | — |
 | `self-test` | all pass | a failure: do not use the build | — | — | — |
 | `pki`, `csr`, `lab`, `keys`, `tokens` | done | runtime error (file not readable, wrong password or PIN, token or crypto failure) | usage error (bad value, empty subject, unknown profile or reason) | refused by a safety rule or verification failed (token root without `--confirm-root`, `client-internal`, a file that would be overwritten, a key that does not match, a CA folder that does not verify, `keys match` mismatch); nothing issued | — |

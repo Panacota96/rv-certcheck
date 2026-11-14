@@ -155,13 +155,17 @@ flowchart TB
     E -- no --> X
     E -- yes --> F{"case_linked → run_started<br/>and run_finished → final audit entry?"}
     F -- no --> X
-    F -- yes --> G{"--rehash: reachable evidence<br/>matches the registry?"}
+    F -- yes --> R{"every output the run's<br/>audit.jsonl records unchanged?"}
+    R -- no --> X
+    R -- yes --> G{"--rehash: reachable evidence<br/>matches the registry?"}
     G -- no --> X
     G -- "yes / not asked" --> OK["OK (exit 0)<br/>warnings: runs without run_finished,<br/>items not reachable"]
 ```
 
 1. `rv-certcheck verify-case <CASE>` (any Rakvor tool has it; they agree). Exit 0 = intact, 3 = broken, 1 = not a
-   case folder. Only `timestamp_obtained` may follow a run's recorded final entry (a delayed timestamp).
+   case folder. Only `timestamp_obtained` may follow a run's recorded final entry (a delayed timestamp). Every
+   output file a run's audit log records (reports, `hashes.csv`, `environment.json`) is re-hashed: an edited,
+   deleted or replaced output is exit 3, named as `run <RUN-ID>: output reports/…`.
    `--rehash` also re-hashes every registered item still reachable at its registered path (the latest registration
    of a path) and compares it with the registry: a difference is exit 3, an unreachable item a warning.
    `rv-certcheck verify-log <CASE>/runs/<tool>/<RUN-ID>/logs` checks one run and anchors its end to `run_finished` in
