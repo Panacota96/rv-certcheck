@@ -55,9 +55,9 @@ fn sha256(b: &[u8]) -> String {
 }
 
 fn epoch(t: &str) -> String {
-    chrono::DateTime::parse_from_rfc3339(t)
+    t.parse::<jiff::Timestamp>()
         .unwrap()
-        .timestamp()
+        .as_second()
         .to_string()
 }
 

@@ -24,7 +24,7 @@ use super::rng::Rand;
 use super::signer::Signer;
 use super::tokens;
 use crate::model::*;
-use chrono::{DateTime, Duration, Utc};
+use crate::utc::UtcTime;
 use openssl::x509::{X509, X509NameRef};
 use std::path::{Path, PathBuf};
 
@@ -59,18 +59,16 @@ pub fn name_rdns(n: &X509NameRef) -> Vec<(String, String)> {
         .collect()
 }
 
-pub fn now() -> DateTime<Utc> {
-    let t = Utc::now();
-    DateTime::from_timestamp(t.timestamp(), 0).unwrap_or(t)
+pub fn now() -> UtcTime {
+    UtcTime::now()
 }
 
 /// RFC 3339 / `YYYY-MM-DD` / `now` (None = now).
-pub fn parse_time(s: Option<&str>) -> CertResult<DateTime<Utc>> {
+pub fn parse_time(s: Option<&str>) -> CertResult<UtcTime> {
     match s.map(str::trim).filter(|s| !s.is_empty()) {
         None => Ok(now()),
         Some(t) => match AtTime::parse(t)? {
-            AtTime::Fixed(f) => chrono::DateTime::parse_from_rfc3339(&f)
-                .map(|d| d.with_timezone(&Utc))
+            AtTime::Fixed(f) => UtcTime::parse_rfc3339(&f)
                 .map_err(|e| CertError::new(ErrorKind::InvalidInput, format!("{t}: {e}"))),
             AtTime::Now => Ok(now()),
             AtTime::SigningTime => Err(CertError::new(
@@ -591,7 +589,7 @@ pub fn init_root(req: &InitRootRequest) -> CertResult<CaFolder> {
     let spki = signer.spki()?;
     let ski = keys::key_id(&spki)?;
     let nb = now();
-    let na = nb + Duration::days(req.validity_days as i64);
+    let na = nb.plus_days(req.validity_days as i64);
     let mut extensions = vec![
         build::ext_basic_constraints(true, None),
         build::ext_key_usage(&[ku::KEY_CERT_SIGN, ku::CRL_SIGN]),
@@ -770,7 +768,7 @@ pub fn import_ca_with_issuer(
         let epoch = openssl::asn1::Asn1Time::from_unix(0).expect("epoch");
         let d = epoch.diff(t).expect("time diff");
         let secs = d.days as i64 * 86400 + d.secs as i64;
-        rfc3339(DateTime::from_timestamp(secs, 0).unwrap_or_default())
+        rfc3339(UtcTime::from_unix(secs).unwrap_or_default())
     };
     let folder = CaFolder {
         schema: CA_SCHEMA.into(),
@@ -998,10 +996,8 @@ pub fn issue_with(req: &IssueRequest, opts: &IssueOptions) -> CertResult<IssueRe
         extensions.push(build::ext_cdp(url));
     }
     let nb = now();
-    let ca_not_after = chrono::DateTime::parse_from_rfc3339(&ca.folder.not_after)
-        .map(|d| d.with_timezone(&Utc))
-        .unwrap_or(nb);
-    let na = (nb + Duration::days(req.validity_days as i64)).min(ca_not_after);
+    let ca_not_after = UtcTime::parse_rfc3339(&ca.folder.not_after).unwrap_or(nb);
+    let na = nb.plus_days(req.validity_days as i64).min(ca_not_after);
     if na <= nb {
         return Err(CertError::new(
             ErrorKind::Policy,
@@ -1140,7 +1136,7 @@ pub fn make_crl(req: &CrlRequest) -> CertResult<CrlResult> {
         ));
     }
     let this = parse_time(req.this_update.as_deref())?;
-    let next = this + Duration::days(req.next_update_days as i64);
+    let next = this.plus_days(req.next_update_days as i64);
     let _lock = Lock::take(&req.ca_dir)?;
     let mut ca = load(&req.ca_dir)?;
     let signer = ca.unlock(&req.ca_unlock)?;
@@ -1203,9 +1199,7 @@ pub fn make_crl(req: &CrlRequest) -> CertResult<CrlResult> {
 pub fn sign_ocsp(req: &OcspSignRequest) -> CertResult<OcspSignResult> {
     let serial = norm_serial(&req.serial_hex);
     let produced = parse_time(req.produced_at.as_deref())?;
-    let next = req
-        .next_update_days
-        .map(|d| produced + Duration::days(d as i64));
+    let next = req.next_update_days.map(|d| produced.plus_days(d as i64));
     let _lock = Lock::take(&req.ca_dir)?;
     let mut ca = load(&req.ca_dir)?;
     let signer = ca.unlock(&req.ca_unlock)?;
@@ -1240,7 +1234,7 @@ pub fn sign_ocsp(req: &OcspSignRequest) -> CertResult<OcspSignResult> {
         &signer,
     )?;
     let sha = sha256_hex(&der);
-    let rel = format!("ocsp/{serial}-{}.der", produced.format("%Y%m%dT%H%M%SZ"));
+    let rel = format!("ocsp/{serial}-{}.der", produced.compact());
     let internal = req.ca_dir.join(&rel);
     keys::write_new(&internal, &der, false)?;
     if absolute(&req.out) != absolute(&internal) {

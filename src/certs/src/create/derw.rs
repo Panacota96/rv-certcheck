@@ -6,7 +6,7 @@
 //! Every function returns a complete TLV. `SET OF` contents are sorted (DER rule 11.6).
 
 use crate::model::*;
-use chrono::{DateTime, Datelike, Utc};
+use crate::utc::UtcTime;
 
 pub fn tlv(tag: u8, content: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(content.len() + 6);
@@ -190,16 +190,16 @@ pub fn content_of(der: &[u8]) -> &[u8] {
 }
 
 /// X.509 Time: UTCTime for 1950–2049, GeneralizedTime otherwise (RFC 5280 4.1.2.5).
-pub fn time(t: DateTime<Utc>) -> Vec<u8> {
+pub fn time(t: UtcTime) -> Vec<u8> {
     if (1950..2050).contains(&t.year()) {
-        tlv(0x17, t.format("%y%m%d%H%M%SZ").to_string().as_bytes())
+        tlv(0x17, t.der_utc_time().as_bytes())
     } else {
         gentime(t)
     }
 }
 
-pub fn gentime(t: DateTime<Utc>) -> Vec<u8> {
-    tlv(0x18, t.format("%Y%m%d%H%M%SZ").to_string().as_bytes())
+pub fn gentime(t: UtcTime) -> Vec<u8> {
+    tlv(0x18, t.der_generalized_time().as_bytes())
 }
 
 /// AlgorithmIdentifier with NULL parameters (RSA family, digests).

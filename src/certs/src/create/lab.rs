@@ -24,7 +24,7 @@ use super::keys::{self, crypto};
 use super::rng::Rand;
 use super::signer::{SigAlg, Signer};
 use crate::model::*;
-use chrono::{DateTime, Duration, Utc};
+use crate::utc::UtcTime;
 use openssl::pkey::{PKey, Private};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -35,7 +35,7 @@ const LAB_NOTICE: &str = "Rakvor lab/test certificate (rv-certcheck lab make): p
 
 struct Lab {
     seed: u64,
-    base: DateTime<Utc>,
+    base: UtcTime,
     set: String,
     files: BTreeMap<String, Vec<u8>>,
 }
@@ -54,8 +54,8 @@ impl Lab {
     fn serial(&self, label: &str) -> CertResult<Vec<u8>> {
         Rand::lab(self.seed, &format!("serial|{label}")).serial()
     }
-    fn at(&self, days: i64) -> DateTime<Utc> {
-        self.base + Duration::days(days)
+    fn at(&self, days: i64) -> UtcTime {
+        self.base.plus_days(days)
     }
     fn rdns(&self, org: &str, cn: &str) -> Vec<(String, String)> {
         vec![
@@ -83,8 +83,8 @@ impl Lab {
         issuer: Option<&Issuer>,
         rdns: &[(String, String)],
         key: &PKey<Private>,
-        nb: DateTime<Utc>,
-        na: DateTime<Utc>,
+        nb: UtcTime,
+        na: UtcTime,
         mut extensions: Vec<Vec<u8>>,
         alg: SigAlg,
     ) -> CertResult<Vec<u8>> {
@@ -216,9 +216,8 @@ pub fn make(spec: &LabSetSpec) -> CertResult<LabSetManifest> {
         spec.base_time.trim()
     };
     let base = match AtTime::parse(base_text)? {
-        AtTime::Fixed(t) => chrono::DateTime::parse_from_rfc3339(&t)
-            .map_err(|e| CertError::new(ErrorKind::InvalidInput, e.to_string()))?
-            .with_timezone(&Utc),
+        AtTime::Fixed(t) => UtcTime::parse_rfc3339(&t)
+            .map_err(|e| CertError::new(ErrorKind::InvalidInput, e.to_string()))?,
         _ => {
             return Err(CertError::new(
                 ErrorKind::InvalidInput,

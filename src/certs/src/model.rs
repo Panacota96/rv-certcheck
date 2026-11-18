@@ -663,12 +663,11 @@ impl AtTime {
                 ),
             )
         };
-        if let Ok(d) = chrono::NaiveDate::parse_from_str(t, "%Y-%m-%d") {
-            let dt = d.and_hms_opt(0, 0, 0).ok_or_else(bad)?;
-            return Ok(AtTime::Fixed(rfc3339(dt.and_utc())));
+        if let Some(d) = crate::utc::UtcTime::parse_date(t) {
+            return Ok(AtTime::Fixed(rfc3339(d)));
         }
-        let dt = chrono::DateTime::parse_from_rfc3339(t).map_err(|_| bad())?;
-        Ok(AtTime::Fixed(rfc3339(dt.with_timezone(&chrono::Utc))))
+        let dt = crate::utc::UtcTime::parse_rfc3339(t).map_err(|_| bad())?;
+        Ok(AtTime::Fixed(rfc3339(dt)))
     }
     pub fn describe(&self) -> String {
         match self {
@@ -680,8 +679,8 @@ impl AtTime {
 }
 
 /// RFC 3339 UTC, second precision, `Z` suffix (the model's time format).
-pub fn rfc3339(t: chrono::DateTime<chrono::Utc>) -> String {
-    t.format("%Y-%m-%dT%H:%M:%SZ").to_string()
+pub fn rfc3339(t: crate::utc::UtcTime) -> String {
+    t.rfc3339()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
