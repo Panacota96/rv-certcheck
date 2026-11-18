@@ -42,6 +42,9 @@ mod analysis;
 mod create;
 mod trustlist;
 
+#[cfg(test)]
+mod golden_time;
+
 pub use model::*;
 use std::path::{Path, PathBuf};
 
