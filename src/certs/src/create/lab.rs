@@ -24,7 +24,7 @@ use super::keys::{self, crypto};
 use super::rng::Rand;
 use super::signer::{SigAlg, Signer};
 use crate::model::*;
-use chrono::{DateTime, Duration, Utc};
+use crate::utc::UtcTime;
 use openssl::pkey::{PKey, Private};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -35,7 +35,7 @@ const LAB_NOTICE: &str = "Rakvor lab/test certificate (rv-certcheck lab make): p
 
 struct Lab {
     seed: u64,
-    base: DateTime<Utc>,
+    base: UtcTime,
     set: String,
     files: BTreeMap<String, Vec<u8>>,
 }
@@ -54,8 +54,8 @@ impl Lab {
     fn serial(&self, label: &str) -> CertResult<Vec<u8>> {
         Rand::lab(self.seed, &format!("serial|{label}")).serial()
     }
-    fn at(&self, days: i64) -> DateTime<Utc> {
-        self.base + Duration::days(days)
+    fn at(&self, days: i64) -> UtcTime {
+        self.base.plus_days(days)
     }
     fn rdns(&self, org: &str, cn: &str) -> Vec<(String, String)> {
         vec![
@@ -83,8 +83,8 @@ impl Lab {
         issuer: Option<&Issuer>,
         rdns: &[(String, String)],
         key: &PKey<Private>,
-        nb: DateTime<Utc>,
-        na: DateTime<Utc>,
+        nb: UtcTime,
+        na: UtcTime,
         mut extensions: Vec<Vec<u8>>,
         alg: SigAlg,
     ) -> CertResult<Vec<u8>> {
@@ -216,9 +216,8 @@ pub fn make(spec: &LabSetSpec) -> CertResult<LabSetManifest> {
         spec.base_time.trim()
     };
     let base = match AtTime::parse(base_text)? {
-        AtTime::Fixed(t) => chrono::DateTime::parse_from_rfc3339(&t)
-            .map_err(|e| CertError::new(ErrorKind::InvalidInput, e.to_string()))?
-            .with_timezone(&Utc),
+        AtTime::Fixed(t) => UtcTime::parse_rfc3339(&t)
+            .map_err(|e| CertError::new(ErrorKind::InvalidInput, e.to_string()))?,
         _ => {
             return Err(CertError::new(
                 ErrorKind::InvalidInput,
@@ -737,4 +736,182 @@ pub fn case_id(k: LabCaseKind) -> &'static str {
         LabCaseKind::BrokenSignature => "broken-signature",
         LabCaseKind::KeyMismatch => "key-mismatch",
     }
+}
+
+/// Frozen from chrono 0.4.45 before the move off chrono: lab validity dates (base ± days, incl. a leap-second
+/// base and the far ends of the calendar) and the base-time rejections must stay identical.
+#[cfg(test)]
+mod golden_time {
+    use super::*;
+
+    const BASES: &[&str] = &[
+        "2026-01-01T00:00:00Z",
+        "2016-12-31T23:59:60Z",
+        "1969-12-31T23:59:59Z",
+        "0000-01-01T00:00:00Z",
+        "9999-12-31T23:59:59Z",
+        "2049-12-31T23:59:59Z",
+    ];
+    const DAYS: &[i64] = &[
+        -730, -365, -30, -7, -1, 0, 1, 7, 30, 365, 3650, 7300, 4_294_967,
+    ];
+
+    fn lines() -> Vec<String> {
+        let mut v = vec![];
+        for b in BASES {
+            let lab = Lab {
+                seed: 1,
+                base: super::super::pki::parse_time(Some(b)).unwrap(),
+                set: "full".into(),
+                files: BTreeMap::new(),
+            };
+            for d in DAYS {
+                let t = lab.at(*d);
+                v.push(format!(
+                    "{b} {d:+} -> {} | {} | cmp {:?}",
+                    rfc3339(t),
+                    hex(&derw::time(t)),
+                    t.cmp(&lab.base)
+                ));
+            }
+        }
+        for base in [
+            "9999-12-31T23:00:00-05:00",
+            "0000-01-01T00:30:00+01:00",
+            "now",
+            "signing-time",
+            "2026-02-30",
+        ] {
+            let spec = LabSetSpec {
+                name: "minimal".into(),
+                seed: 1,
+                base_time: base.into(),
+                out_dir: std::env::temp_dir().join("rv-certcheck-golden-never-created"),
+            };
+            v.push(format!(
+                "{base} -> {:?}",
+                make(&spec).map(|_| ()).map_err(|e| e.message)
+            ));
+        }
+        v
+    }
+
+    #[test]
+    fn golden_lab_dates() {
+        let got = lines();
+        assert_eq!(got.len(), WANT.len());
+        for (g, w) in got.iter().zip(WANT) {
+            assert_eq!(g, w);
+        }
+    }
+
+    /// chrono panics when a validity end leaves its calendar (±262 143 years); that must not silently change.
+    #[test]
+    #[should_panic(expected = "`DateTime + TimeDelta` overflowed")]
+    fn golden_lab_date_overflow_panics() {
+        let lab = Lab {
+            seed: 1,
+            base: super::super::pki::parse_time(Some("2026-01-01T00:00:00Z")).unwrap(),
+            set: "full".into(),
+            files: BTreeMap::new(),
+        };
+        let _ = lab.at(i64::from(u32::MAX));
+    }
+
+    #[test]
+    #[ignore]
+    fn print() {
+        println!("const WANT: &[&str] = &[");
+        for l in lines() {
+            println!("    {l:?},");
+        }
+        println!("];");
+    }
+
+    #[rustfmt::skip]
+    const WANT: &[&str] = &[
+        "2026-01-01T00:00:00Z -730 -> 2024-01-02T00:00:00Z | 170d3234303130323030303030305a | cmp Less",
+        "2026-01-01T00:00:00Z -365 -> 2025-01-01T00:00:00Z | 170d3235303130313030303030305a | cmp Less",
+        "2026-01-01T00:00:00Z -30 -> 2025-12-02T00:00:00Z | 170d3235313230323030303030305a | cmp Less",
+        "2026-01-01T00:00:00Z -7 -> 2025-12-25T00:00:00Z | 170d3235313232353030303030305a | cmp Less",
+        "2026-01-01T00:00:00Z -1 -> 2025-12-31T00:00:00Z | 170d3235313233313030303030305a | cmp Less",
+        "2026-01-01T00:00:00Z +0 -> 2026-01-01T00:00:00Z | 170d3236303130313030303030305a | cmp Equal",
+        "2026-01-01T00:00:00Z +1 -> 2026-01-02T00:00:00Z | 170d3236303130323030303030305a | cmp Greater",
+        "2026-01-01T00:00:00Z +7 -> 2026-01-08T00:00:00Z | 170d3236303130383030303030305a | cmp Greater",
+        "2026-01-01T00:00:00Z +30 -> 2026-01-31T00:00:00Z | 170d3236303133313030303030305a | cmp Greater",
+        "2026-01-01T00:00:00Z +365 -> 2027-01-01T00:00:00Z | 170d3237303130313030303030305a | cmp Greater",
+        "2026-01-01T00:00:00Z +3650 -> 2035-12-30T00:00:00Z | 170d3335313233303030303030305a | cmp Greater",
+        "2026-01-01T00:00:00Z +7300 -> 2045-12-27T00:00:00Z | 170d3435313232373030303030305a | cmp Greater",
+        "2026-01-01T00:00:00Z +4294967 -> +13785-03-22T00:00:00Z | 18112b3133373835303332323030303030305a | cmp Greater",
+        "2016-12-31T23:59:60Z -730 -> 2015-01-02T00:00:00Z | 170d3135303130323030303030305a | cmp Less",
+        "2016-12-31T23:59:60Z -365 -> 2016-01-02T00:00:00Z | 170d3136303130323030303030305a | cmp Less",
+        "2016-12-31T23:59:60Z -30 -> 2016-12-02T00:00:00Z | 170d3136313230323030303030305a | cmp Less",
+        "2016-12-31T23:59:60Z -7 -> 2016-12-25T00:00:00Z | 170d3136313232353030303030305a | cmp Less",
+        "2016-12-31T23:59:60Z -1 -> 2016-12-31T00:00:00Z | 170d3136313233313030303030305a | cmp Less",
+        "2016-12-31T23:59:60Z +0 -> 2016-12-31T23:59:60Z | 170d3136313233313233353936305a | cmp Equal",
+        "2016-12-31T23:59:60Z +1 -> 2017-01-01T23:59:59Z | 170d3137303130313233353935395a | cmp Greater",
+        "2016-12-31T23:59:60Z +7 -> 2017-01-07T23:59:59Z | 170d3137303130373233353935395a | cmp Greater",
+        "2016-12-31T23:59:60Z +30 -> 2017-01-30T23:59:59Z | 170d3137303133303233353935395a | cmp Greater",
+        "2016-12-31T23:59:60Z +365 -> 2017-12-31T23:59:59Z | 170d3137313233313233353935395a | cmp Greater",
+        "2016-12-31T23:59:60Z +3650 -> 2026-12-29T23:59:59Z | 170d3236313232393233353935395a | cmp Greater",
+        "2016-12-31T23:59:60Z +7300 -> 2036-12-26T23:59:59Z | 170d3336313232363233353935395a | cmp Greater",
+        "2016-12-31T23:59:60Z +4294967 -> +13776-03-21T23:59:59Z | 18112b3133373736303332313233353935395a | cmp Greater",
+        "1969-12-31T23:59:59Z -730 -> 1968-01-01T23:59:59Z | 170d3638303130313233353935395a | cmp Less",
+        "1969-12-31T23:59:59Z -365 -> 1968-12-31T23:59:59Z | 170d3638313233313233353935395a | cmp Less",
+        "1969-12-31T23:59:59Z -30 -> 1969-12-01T23:59:59Z | 170d3639313230313233353935395a | cmp Less",
+        "1969-12-31T23:59:59Z -7 -> 1969-12-24T23:59:59Z | 170d3639313232343233353935395a | cmp Less",
+        "1969-12-31T23:59:59Z -1 -> 1969-12-30T23:59:59Z | 170d3639313233303233353935395a | cmp Less",
+        "1969-12-31T23:59:59Z +0 -> 1969-12-31T23:59:59Z | 170d3639313233313233353935395a | cmp Equal",
+        "1969-12-31T23:59:59Z +1 -> 1970-01-01T23:59:59Z | 170d3730303130313233353935395a | cmp Greater",
+        "1969-12-31T23:59:59Z +7 -> 1970-01-07T23:59:59Z | 170d3730303130373233353935395a | cmp Greater",
+        "1969-12-31T23:59:59Z +30 -> 1970-01-30T23:59:59Z | 170d3730303133303233353935395a | cmp Greater",
+        "1969-12-31T23:59:59Z +365 -> 1970-12-31T23:59:59Z | 170d3730313233313233353935395a | cmp Greater",
+        "1969-12-31T23:59:59Z +3650 -> 1979-12-29T23:59:59Z | 170d3739313232393233353935395a | cmp Greater",
+        "1969-12-31T23:59:59Z +7300 -> 1989-12-26T23:59:59Z | 170d3839313232363233353935395a | cmp Greater",
+        "1969-12-31T23:59:59Z +4294967 -> +13729-03-21T23:59:59Z | 18112b3133373239303332313233353935395a | cmp Greater",
+        "0000-01-01T00:00:00Z -730 -> -0002-01-01T00:00:00Z | 18102d30303032303130313030303030305a | cmp Less",
+        "0000-01-01T00:00:00Z -365 -> -0001-01-01T00:00:00Z | 18102d30303031303130313030303030305a | cmp Less",
+        "0000-01-01T00:00:00Z -30 -> -0001-12-02T00:00:00Z | 18102d30303031313230323030303030305a | cmp Less",
+        "0000-01-01T00:00:00Z -7 -> -0001-12-25T00:00:00Z | 18102d30303031313232353030303030305a | cmp Less",
+        "0000-01-01T00:00:00Z -1 -> -0001-12-31T00:00:00Z | 18102d30303031313233313030303030305a | cmp Less",
+        "0000-01-01T00:00:00Z +0 -> 0000-01-01T00:00:00Z | 180f30303030303130313030303030305a | cmp Equal",
+        "0000-01-01T00:00:00Z +1 -> 0000-01-02T00:00:00Z | 180f30303030303130323030303030305a | cmp Greater",
+        "0000-01-01T00:00:00Z +7 -> 0000-01-08T00:00:00Z | 180f30303030303130383030303030305a | cmp Greater",
+        "0000-01-01T00:00:00Z +30 -> 0000-01-31T00:00:00Z | 180f30303030303133313030303030305a | cmp Greater",
+        "0000-01-01T00:00:00Z +365 -> 0000-12-31T00:00:00Z | 180f30303030313233313030303030305a | cmp Greater",
+        "0000-01-01T00:00:00Z +3650 -> 0009-12-29T00:00:00Z | 180f30303039313232393030303030305a | cmp Greater",
+        "0000-01-01T00:00:00Z +7300 -> 0019-12-27T00:00:00Z | 180f30303139313232373030303030305a | cmp Greater",
+        "0000-01-01T00:00:00Z +4294967 -> +11759-03-22T00:00:00Z | 18112b3131373539303332323030303030305a | cmp Greater",
+        "9999-12-31T23:59:59Z -730 -> 9997-12-31T23:59:59Z | 180f39393937313233313233353935395a | cmp Less",
+        "9999-12-31T23:59:59Z -365 -> 9998-12-31T23:59:59Z | 180f39393938313233313233353935395a | cmp Less",
+        "9999-12-31T23:59:59Z -30 -> 9999-12-01T23:59:59Z | 180f39393939313230313233353935395a | cmp Less",
+        "9999-12-31T23:59:59Z -7 -> 9999-12-24T23:59:59Z | 180f39393939313232343233353935395a | cmp Less",
+        "9999-12-31T23:59:59Z -1 -> 9999-12-30T23:59:59Z | 180f39393939313233303233353935395a | cmp Less",
+        "9999-12-31T23:59:59Z +0 -> 9999-12-31T23:59:59Z | 180f39393939313233313233353935395a | cmp Equal",
+        "9999-12-31T23:59:59Z +1 -> +10000-01-01T23:59:59Z | 18112b3130303030303130313233353935395a | cmp Greater",
+        "9999-12-31T23:59:59Z +7 -> +10000-01-07T23:59:59Z | 18112b3130303030303130373233353935395a | cmp Greater",
+        "9999-12-31T23:59:59Z +30 -> +10000-01-30T23:59:59Z | 18112b3130303030303133303233353935395a | cmp Greater",
+        "9999-12-31T23:59:59Z +365 -> +10000-12-30T23:59:59Z | 18112b3130303030313233303233353935395a | cmp Greater",
+        "9999-12-31T23:59:59Z +3650 -> +10009-12-28T23:59:59Z | 18112b3130303039313232383233353935395a | cmp Greater",
+        "9999-12-31T23:59:59Z +7300 -> +10019-12-26T23:59:59Z | 18112b3130303139313232363233353935395a | cmp Greater",
+        "9999-12-31T23:59:59Z +4294967 -> +21759-03-21T23:59:59Z | 18112b3231373539303332313233353935395a | cmp Greater",
+        "2049-12-31T23:59:59Z -730 -> 2048-01-01T23:59:59Z | 170d3438303130313233353935395a | cmp Less",
+        "2049-12-31T23:59:59Z -365 -> 2048-12-31T23:59:59Z | 170d3438313233313233353935395a | cmp Less",
+        "2049-12-31T23:59:59Z -30 -> 2049-12-01T23:59:59Z | 170d3439313230313233353935395a | cmp Less",
+        "2049-12-31T23:59:59Z -7 -> 2049-12-24T23:59:59Z | 170d3439313232343233353935395a | cmp Less",
+        "2049-12-31T23:59:59Z -1 -> 2049-12-30T23:59:59Z | 170d3439313233303233353935395a | cmp Less",
+        "2049-12-31T23:59:59Z +0 -> 2049-12-31T23:59:59Z | 170d3439313233313233353935395a | cmp Equal",
+        "2049-12-31T23:59:59Z +1 -> 2050-01-01T23:59:59Z | 180f32303530303130313233353935395a | cmp Greater",
+        "2049-12-31T23:59:59Z +7 -> 2050-01-07T23:59:59Z | 180f32303530303130373233353935395a | cmp Greater",
+        "2049-12-31T23:59:59Z +30 -> 2050-01-30T23:59:59Z | 180f32303530303133303233353935395a | cmp Greater",
+        "2049-12-31T23:59:59Z +365 -> 2050-12-31T23:59:59Z | 180f32303530313233313233353935395a | cmp Greater",
+        "2049-12-31T23:59:59Z +3650 -> 2059-12-29T23:59:59Z | 180f32303539313232393233353935395a | cmp Greater",
+        "2049-12-31T23:59:59Z +7300 -> 2069-12-26T23:59:59Z | 180f32303639313232363233353935395a | cmp Greater",
+        "2049-12-31T23:59:59Z +4294967 -> +13809-03-22T23:59:59Z | 18112b3133383039303332323233353935395a | cmp Greater",
+        "9999-12-31T23:00:00-05:00 -> Err(\"input contains invalid characters\")",
+        "0000-01-01T00:30:00+01:00 -> Err(\"input contains invalid characters\")",
+        "now -> Err(\"the lab base time must be a fixed date (never the wall clock)\")",
+        "signing-time -> Err(\"the lab base time must be a fixed date (never the wall clock)\")",
+        "2026-02-30 -> Err(\"invalid --at '2026-02-30': use now, signing-time, YYYY-MM-DD or an RFC 3339 time such as 2026-06-01T12:00:00Z\")",
+    ];
 }

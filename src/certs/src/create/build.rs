@@ -3,7 +3,7 @@
 use super::derw::*;
 use super::signer::{SigAlg, Signer};
 use crate::model::*;
-use chrono::{DateTime, Utc};
+use crate::utc::UtcTime;
 
 pub const OID_EKU_SERVER_AUTH: &str = "1.3.6.1.5.5.7.3.1";
 pub const OID_EKU_CODE_SIGNING: &str = "1.3.6.1.5.5.7.3.3";
@@ -92,8 +92,8 @@ pub struct CertTemplate {
     /// Issuer Name DER (the CA certificate's subject, byte for byte).
     pub issuer: Vec<u8>,
     pub subject: Vec<u8>,
-    pub not_before: DateTime<Utc>,
-    pub not_after: DateTime<Utc>,
+    pub not_before: UtcTime,
+    pub not_after: UtcTime,
     pub spki: Vec<u8>,
     pub extensions: Vec<Vec<u8>>,
 }
@@ -147,7 +147,7 @@ pub fn reason_code(name: &str) -> CertResult<u8> {
 
 pub struct RevokedSpec {
     pub serial: Vec<u8>,
-    pub at: DateTime<Utc>,
+    pub at: UtcTime,
     pub reason: String,
 }
 
@@ -156,8 +156,8 @@ pub struct RevokedSpec {
 pub fn crl(
     issuer: &[u8],
     issuer_key_id: &[u8],
-    this_update: DateTime<Utc>,
-    next_update: DateTime<Utc>,
+    this_update: UtcTime,
+    next_update: UtcTime,
     number: u64,
     revoked: &[RevokedSpec],
     alg: SigAlg,
@@ -212,7 +212,7 @@ pub fn csr(
 
 pub enum OcspCertStatus {
     Good,
-    Revoked { at: DateTime<Utc>, reason: String },
+    Revoked { at: UtcTime, reason: String },
     Unknown,
 }
 
@@ -226,8 +226,8 @@ pub fn ocsp_response(
     issuer_key_bits: &[u8],
     serial: &[u8],
     status: &OcspCertStatus,
-    produced_at: DateTime<Utc>,
-    next_update: Option<DateTime<Utc>>,
+    produced_at: UtcTime,
+    next_update: Option<UtcTime>,
     alg: SigAlg,
     signer: &Signer,
 ) -> CertResult<Vec<u8>> {

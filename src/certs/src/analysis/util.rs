@@ -23,7 +23,7 @@ pub fn sha1_hex(b: &[u8]) -> String {
 
 /// Seconds since the Unix epoch → the model's RFC 3339 format.
 pub fn epoch_to_rfc3339(secs: i64) -> String {
-    chrono::DateTime::from_timestamp(secs, 0)
+    crate::utc::UtcTime::from_unix(secs)
         .map(rfc3339)
         .unwrap_or_else(|| format!("@{secs}"))
 }
@@ -31,9 +31,9 @@ pub fn epoch_to_rfc3339(secs: i64) -> String {
 /// RFC 3339 (any offset) → seconds since the Unix epoch.
 pub fn rfc3339_to_epoch(s: &str) -> CertResult<i64> {
     if let Ok(AtTime::Fixed(t)) = AtTime::parse(s)
-        && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&t)
+        && let Ok(dt) = crate::utc::UtcTime::parse_rfc3339(&t)
     {
-        return Ok(dt.timestamp());
+        return Ok(dt.unix());
     }
     Err(CertError::new(
         ErrorKind::InvalidInput,
@@ -42,7 +42,7 @@ pub fn rfc3339_to_epoch(s: &str) -> CertResult<i64> {
 }
 
 pub fn now_rfc3339() -> String {
-    rfc3339(chrono::Utc::now())
+    rfc3339(crate::utc::UtcTime::now())
 }
 
 /// OpenSSL ASN1_TIME → seconds since the epoch.
@@ -69,9 +69,7 @@ pub fn printed_time_to_rfc3339(s: &str) -> Option<String> {
         *p = hms.to_string();
     }
     let norm = parts.join(" ");
-    chrono::NaiveDateTime::parse_from_str(&norm, "%b %d %H:%M:%S %Y")
-        .ok()
-        .map(|t| rfc3339(t.and_utc()))
+    crate::utc::UtcTime::parse_printed(&norm).map(rfc3339)
 }
 
 /// (short name, value) pairs in certificate order. Unknown attributes keep their OID.
@@ -283,7 +281,7 @@ pub fn generalized_time(content: &[u8]) -> Option<String> {
     if !(zone.is_empty() || zone == "Z") {
         return None;
     }
-    chrono::DateTime::parse_from_rfc3339(&s).ok()?;
+    crate::utc::UtcTime::parse_rfc3339(&s).ok()?;
     Some(s)
 }
 

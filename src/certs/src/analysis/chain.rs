@@ -666,7 +666,11 @@ fn crl_file(crls: &[openssl::x509::X509Crl]) -> CertResult<CrlFile> {
         "rv-certcheck-crl-{}-{}-{}.pem",
         std::process::id(),
         N.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-        chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|d| i64::try_from(d.as_nanos()).ok())
+            .unwrap_or(0)
     );
     let path = std::env::temp_dir().join(name);
     let mut f = std::fs::OpenOptions::new()

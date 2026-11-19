@@ -146,9 +146,11 @@ fn lab_sets_minimal_base_time_refusals_and_ocsp_oracle() {
         s(&set.join("revoked-by-ocsp/leaf.crt")),
         "-no_nonce",
         "-attime",
-        &chrono::DateTime::parse_from_rfc3339(&full.base_time)
+        &full
+            .base_time
+            .parse::<jiff::Timestamp>()
             .unwrap()
-            .timestamp()
+            .as_second()
             .to_string(),
         // `openssl ocsp` judges thisUpdate/nextUpdate against the wall clock (not -attime): the lab set is dated
         // from its base time, so allow ten years of skew.

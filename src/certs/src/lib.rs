@@ -37,10 +37,14 @@
 #![forbid(unsafe_code)]
 
 pub mod model;
+pub mod utc;
 
 mod analysis;
 mod create;
 mod trustlist;
+
+#[cfg(test)]
+mod golden_time;
 
 pub use model::*;
 use std::path::{Path, PathBuf};
