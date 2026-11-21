@@ -4,6 +4,8 @@
 use eframe::egui;
 
 fn main() -> eframe::Result {
+    // The start-up release check (notify only; RV_NO_UPDATE_CHECK=1 turns it off).
+    rv_certcheck_core::update::start_gui_check();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("RV CertCheck — Rakvor")

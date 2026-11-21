@@ -37,6 +37,7 @@ flowchart TB
 | Memory | Files are streamed in 1 MiB chunks: memory use does not grow with file size. |
 | Graphics | None required: the GUI also runs on VMs without a GPU driver (software rendering). |
 | Network | None, except the optional timestamp request and `analyze --online` (see [step 7](#7-offline-and-air-gapped-use)). |
+| Release check | Optional, notify only: the desktop app at start-up and `rv-certcheck update-check` read the public latest-release page on github.com ([Release check](#release-check)); `RV_NO_UPDATE_CHECK=1` turns it off. |
 | Hardware token (optional) | A PKCS#11 module for the token: YubiKey 5 with the Yubico PIV Tool (`libykcs11.dll`), an HSM vendor module, or SoftHSM2 for tests (see [5d](#5d-pkcs11-modules-hardware-tokens)). |
 
 ## 1. Download
@@ -277,8 +278,7 @@ Network access in the code is limited to: the RFC 3161 timestamp request for the
 32-byte hash to the TSA, [src/core/src/trust.rs](../src/core/src/trust.rs)), and, **only with `analyze --online`**,
 GET requests to the CRL distribution points and POST requests to the OCSP responders named in the certificates
 examined ([src/certs/src/analysis/online.rs](../src/certs/src/analysis/online.rs); each URL, time and response
-SHA-256 is audited). `trust-list import` reads a local file only. There is no telemetry, update check or licence
-check.
+SHA-256 is audited). `trust-list import` reads a local file only. There is no telemetry or licence check.
 
 | To disable the timestamp | How |
 | --- | --- |
@@ -407,3 +407,16 @@ The same script compares this build with the Python profile of the tool (measure
 | `--anchor system` refused on Windows | Not available on Windows in v0.1: export the root and use `--anchor FILE`. |
 | `tokens list` fails to load the module | Wrong path or a 32-bit module: use the 64-bit `libykcs11.dll` of the Yubico PIV Tool. |
 | Building from source downloads another compiler | Expected: rustup installs the pinned 1.97.0 from `rust-toolchain.toml`. Offline, install it beforehand (`rustup toolchain install 1.97.0 --profile minimal`). |
+
+## Release check
+
+Is a newer release published? The tool can tell you; it never updates itself.
+
+| | |
+| --- | --- |
+| When | The desktop app checks once at start-up, in the background (a banner with the release page appears only when a newer release exists). The CLI checks only with `rv-certcheck update-check` (`--json` for scripts; exit 0 = latest, 3 = newer release, 1 = could not check). No other command contacts the network for it. RV Hub checks every tool it lists. |
+| What is sent | One HTTPS GET of `https://github.com/Panacota96/rv-certcheck/releases/latest` (the redirect is read, not followed) with `User-Agent: rv-certcheck/<version>` and no other header, cookie or parameter: nothing about the case, the evidence, the examiner or the machine. |
+| What it does | It names the newer version and its release page. It never downloads or installs anything: download the release and verify it (`SHA256SUMS`, Authenticode chain to the Rakvor root) as in [Verify the download](#2-verify-the-download) before use. |
+| Audit | The check is not part of a run and is not written to any audit log; a failed or slow check (offline, 5 s timeout) never blocks the tool. |
+| Turn it off | `RV_NO_UPDATE_CHECK=1` (any value but empty or `0`), or the file `update-check-off` in `%APPDATA%\Rakvor` (RV Hub's setting writes it): off for every Rakvor tool on this PC. |
+| Code | [src/core/src/update.rs](../src/core/src/update.rs) (shared, byte-identical, by every Rakvor tool) |
