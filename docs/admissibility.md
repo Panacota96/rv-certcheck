@@ -838,3 +838,11 @@ US and UK
      [to verify].
 50. Daubert v. Merrell Dow Pharmaceuticals, 509 U.S. 579 (1993); Kumho Tire Co. v. Carmichael, 526 U.S. 137
     (1999). Citations [to verify].
+
+### Release check (network)
+
+The optional release check ([installation.md](installation.md#release-check)) is the only network access besides the
+trusted timestamp. It sends one HTTPS GET of the public release page with `User-Agent: rv-certcheck/<version>`: no case
+data, no evidence, no hash and no personal data. Where this page says that only a hash leaves the machine, that
+statement is about case data and still holds. In an air-gapped lab the check fails silently, and `RV_NO_UPDATE_CHECK=1`
+turns it off (to be verified with the data-protection officer for each deployment).
