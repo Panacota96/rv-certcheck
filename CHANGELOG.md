@@ -5,6 +5,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Entries are generated from
 [Conventional Commits](https://www.conventionalcommits.org/) by release-please and reviewed by a human.
 
+## [0.3.0](https://github.com/Panacota96/rv-certcheck/compare/v0.2.4...v0.3.0) (2026-11-21)
+
+
+### Features
+
+* **update:** check for a newer release (update-check, start-up banner) ([#22](https://github.com/Panacota96/rv-certcheck/issues/22)) ([561ab28](https://github.com/Panacota96/rv-certcheck/commit/561ab283c47fa22f99b90f70703da322dacef77a))
+
 ## [0.2.4](https://github.com/Panacota96/rv-certcheck/compare/v0.2.3...v0.2.4) (2026-11-19)
 
 
