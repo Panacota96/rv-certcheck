@@ -5,6 +5,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Entries are generated from
 [Conventional Commits](https://www.conventionalcommits.org/) by release-please and reviewed by a human.
 
+## [0.3.1](https://github.com/Panacota96/rv-certcheck/compare/v0.3.0...v0.3.1) (2026-11-24)
+
+
+### Performance Improvements
+
+* **verify:** stream the audit log instead of holding every entry ([#24](https://github.com/Panacota96/rv-certcheck/issues/24)) ([1014450](https://github.com/Panacota96/rv-certcheck/commit/1014450b9fdd06964850c093969cfc07d803b896))
+
 ## [0.3.0](https://github.com/Panacota96/rv-certcheck/compare/v0.2.4...v0.3.0) (2026-11-21)
 
 
