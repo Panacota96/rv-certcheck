@@ -46,7 +46,7 @@ Release assets on the GitHub Releases page of the repository (`rakvor/rv-certche
 
 | Asset | What it is |
 | --- | --- |
-| `rv-certcheck-X.Y.Z-windows-x64.zip` | Portable: `rv-certcheck.exe`, `rv-certcheck-gui.exe`, README, LICENSE, NOTICE, CHANGELOG, `docs/`, `examples/` |
+| `rv-certcheck-X.Y.Z-windows-x64.zip` | Portable: `rv-certcheck.exe`, `rv-certcheck-gui.exe`, README, LICENSE, COMMERCIAL.md, NOTICE, CHANGELOG, `docs/`, `examples/` |
 | `rv-certcheck-X.Y.Z-windows-x64-setup.exe` | Inno Setup installer, per-user |
 | `SHA256SUMS` | SHA-256 of the zip, the installer and the SBOM (`sha256sum` format: `<hash>  ./<file>`) |
 | `sbom.cdx.json` | CycloneDX software bill of materials (every Rust dependency and version) |
@@ -179,7 +179,7 @@ Unattended:
 .\rv-certcheck-0.1.0-windows-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS="addtopath"
 ```
 
-The installer copies the executables, README, LICENSE, NOTICE, CHANGELOG, `docs\` and the sample evidence
+The installer copies the executables, README, LICENSE, COMMERCIAL.md, NOTICE, CHANGELOG, `docs\` and the sample evidence
 (`examples\sample\evidence\`), not the sample scripts or `expected_hashes.csv` (those are in the zip and the source
 tree).
 

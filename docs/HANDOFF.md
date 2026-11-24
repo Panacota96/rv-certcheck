@@ -83,7 +83,7 @@ variables or prompts and never logged; no GPL/AGPL/LGPL components; tools report
 - v0.3 scope (planned, not built): PAdES/XAdES (optional Python worker), S/MIME, Authenticode, OpenPGP, JWS/JWT, live TLS endpoints (`--online`).
 - Client CSR signing (`client-internal` profile) stays disabled until a CP/CPS exists and has been reviewed by counsel; Rakvor certificates are internal-use, not a *firma digital* (Ley 527 art. 28) and not qualified (eIDAS).
 - Root key ceremony on a hardware token (YubiKey, PKCS#11) is pending; the root private key is held offline by its owner and is never in this repository.
-- The licence (`LICENSE`) and the admissibility analysis (`docs/admissibility.md`) are drafts pending a lawyer's review (Colombia and France).
+- Licence: PolyForm Noncommercial 1.0.0 (`LICENSE`, owner decision 2026-11-24; commercial use needs a licence from Rakvor, `COMMERCIAL.md`). Rakvor's licensing texts (`COMMERCIAL.md`, `NOTICE`) and the admissibility analysis (`docs/admissibility.md`) are drafts pending a lawyer's review (Colombia and France).
 - Revocation of the TSA certificate is never checked by the tools (gap G18): it is established separately from CRL/OCSP evidence covering genTime ([ADR 0002](adr/0002-tsa-token-verification.md)).
 - Recorded outputs (gap G19, closed here): `src/core/src/outputs.rs` (SHA-256 `673158d8…5b9f645f`, the copy in
   rv-hashinv is the reference) re-hashes every output a run's audit log records, in `verify-log` and `verify-case`,
