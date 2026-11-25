@@ -59,7 +59,7 @@ sequenceDiagram
 
 | Artifact | Built by |
 | --- | --- |
-| `rv-certcheck-X.Y.Z-windows-x64.zip` | portable: both exes + README + LICENSE + NOTICE + examples |
+| `rv-certcheck-X.Y.Z-windows-x64.zip` | portable: both exes + README + LICENSE + COMMERCIAL.md + NOTICE + examples |
 | `rv-certcheck-X.Y.Z-windows-x64-setup.exe` | Inno Setup (`packaging/windows/installer.iss`), per-user install, adds CLI to PATH |
 | `SHA256SUMS` | `sha256sum` over the assets |
 | `sbom.cdx.json` | `cargo cyclonedx` |

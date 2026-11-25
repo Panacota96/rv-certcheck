@@ -23,9 +23,12 @@
 
 ## 1. Purpose and how to read this page
 
-RV CertCheck is used **locally** by Rakvor; it is not distributed. Clients, courts and opposing experts may audit it
-and rebuild it from source under the Rakvor Source-Auditable Licence ([LICENSE](../LICENSE), draft pending legal
-review). Its results are **observations for an examiner, never a verdict**
+RV CertCheck is source-available under the PolyForm Noncommercial License 1.0.0 ([LICENSE](../LICENSE)): anyone,
+including a court, an opposing party or its expert, may inspect, build and run the exact version named in a
+report for non-commercial purposes. Commercial use needs a licence from Rakvor ([COMMERCIAL.md](../COMMERCIAL.md)).
+Rakvor's licensing texts are drafts pending legal review; whether a given use (for example a paid expert's
+review) counts as non-commercial is to be verified by counsel.
+Its results are **observations for an examiner, never a verdict**
 ([theory.md](theory.md#a1-what-the-tool-is-and-is-not)). Admissibility and weight are decided by a court about the
 **examiner's evidence**, of which the tool's output is one part. Status values used below:
 
@@ -77,7 +80,7 @@ PRIS content.
 | F14 | CI on Windows and Linux | [.github/workflows/ci.yml](../.github/workflows/ci.yml) |
 | F15 | SBOM and build provenance | [.github/workflows/release.yml](../.github/workflows/release.yml) (CycloneDX, `actions/attest-build-provenance`) |
 | F16 | Versioned releases with `SHA256SUMS`; pinned toolchain | [.github/workflows/release.yml](../.github/workflows/release.yml); [rust-toolchain.toml](../rust-toolchain.toml); [installation.md](installation.md#2-verify-the-download) |
-| F17 | Source auditable by customers and opposing experts; local use only, no redistribution | [LICENSE](../LICENSE) (Rakvor Source-Auditable Licence, draft pending legal review); [NOTICE](../NOTICE) |
+| F17 | Source available to anyone, including courts and opposing experts, to inspect, build and run for non-commercial purposes (PolyForm Noncommercial 1.0.0) | [LICENSE](../LICENSE); [COMMERCIAL.md](../COMMERCIAL.md) (draft, to be verified by counsel); [NOTICE](../NOTICE) |
 | F18 | Shared case folder: evidence registry, hash-chained case log, cross-linked run chains, `verify-case` | [src/core/src/case.rs](../src/core/src/case.rs); `--case-dir`, `--evidence`, `rv-certcheck verify-case`; [case-folder.md](case-folder.md) |
 
 <!-- forge:domain -->
@@ -152,7 +155,7 @@ Daubert/Kumho ([to verify]) give the vocabulary opposing experts use.
 | --- | --- | --- |
 | **Testability** — can the method be tested? | Every verdict can be re-run with `openssl verify -attime -purpose -CRLfile` on the same files (F20, F28); deterministic lab sets with expected findings ([theory.md B16](theory.md#b16-lab-sets-and-determinism)); sample with expected findings and independently computed digests (F11); unit, integration and fuzz tests on Windows and Linux (F14) | met |
 | **Known or potential error rate, and limits** | Path validation is OpenSSL's, compared with the OpenSSL CLI and with Python `cryptography` on synthetic fixtures (F28); every finding states what it does not prove (F8); limitations in every report (F9), including `NO_VALIDATED_ERROR_RATES_YET`. **No error rate measured on a validated corpus** of real-world certificates (G5) | partial |
-| **Peer review / independent oracles** | Source auditable (F17); OpenSSL CLI and Python `cryptography` as independent verdict oracles (F28, in CI); Python re-implementation of the audit chain (F12); pyHanko validation of every signed PDF report (in CI). No publication or external review (G7) | partial |
+| **Peer review / independent oracles** | Source available for review (F17); OpenSSL CLI and Python `cryptography` as independent verdict oracles (F28, in CI); Python re-implementation of the audit chain (F12); pyHanko validation of every signed PDF report (in CI). No publication or external review (G7) | partial |
 | **Standards controlling the operation** | RFC 5280 (path validation, CRL), RFC 6960 (OCSP), RFC 3161 / 5816 (timestamps), ETSI TS 119 612 (trust lists), RFC 8018 / 7292 (key protection); FIPS 180-4/202, RFC 1321 for digests; RFC 5652 for signatures; ISO/IEC 27037 principles ([section 6.1](#61-isoiec-270372012--identification-collection-acquisition-and-preservation-of-digital-evidence)); release verification ([installation.md](installation.md)); examiner checklist (below). No enforced hash policy (G11); no formal SOP signed by the firm | partial |
 | **General acceptance** | X.509 path validation with OpenSSL is the reference implementation used across the industry; verdicts agree with `openssl verify` (F28); digests agree with standard utilities and Python `hashlib` (F12) | met |
 | **Validation for intended use** (ISO/IEC 17025 §7.2.2 [V]; 27041 — [to verify]) | Inputs exist (F10–F14) but there is **no per-release validation report** with plan, acceptance criteria, results and sign-off (G6) | gap |
@@ -187,7 +190,7 @@ normograma mirror (arts. 366–453).
 | CO-P14 | Perito examined on instruments, principles, methods, and "corroboración … por otros expertos" | Art. 417 [V] | F4, F9, F12, F17; [theory.md](theory.md); validation dossier missing (G6) | partial |
 | CO-P15 | Court weighs competence, acceptance of principles, instruments, consistency | Art. 420 [V] | F12, F16, F17, F28; X.509 validation with OpenSSL is generally accepted; error rates not measured on real material (G5) | partial |
 | CO-P16 | Novel technique meets ≥ 1: verifiable; published and peer-reviewed; "se haya acreditado el nivel de confiabilidad"; academic acceptance | Art. 422 [V] | RFC 5280 path validation is not novel; verifiable: F20, F28, F11 (criterion 1 met); the tool's own rules (re-run walk, freshness, document-signing purpose) are published in [theory.md](theory.md) but not peer-reviewed (G7) | partial |
-| CO-P17 | Peritos have access to the EMP referred to in reports (enables opposing review) | Art. 416 [V] | F17 auditable source; F11 samples; F16 exact release; F18 registry with every digest | met |
+| CO-P17 | Peritos have access to the EMP referred to in reports (enables opposing review) | Art. 416 [V] | F17 source available for review; F11 samples; F16 exact release; F18 registry with every digest | met |
 | CO-P18 | Data messages are documents; authenticated by certification of a digital-signature entity or "informe de experto" | Art. 424 #7, art. 426 [V] | F6 (expert report) with F2/F3 integrity evidence; F20–F26 examine the certificates of the *entidad certificadora* route (chain, revocation, accreditation list) | met (expert route) / partial (signed objects themselves in v0.2, G4) |
 | CO-P19 | Documentary appraisal: "Que no haya sido alterado en su forma ni en su contenido" | Art. 432 #1 [V] | F2, F3, F18: no change **from intake onward**; earlier changes are outside this tool (F9) | met (from intake) |
 | CO-P20 | Best evidence: the original is required where it is part of custody or a technical study | Arts. 433–434 parágrafo [V] | F1 preserves; hashed working copy | examiner (custody of the original) |
@@ -619,7 +622,7 @@ Rakvor management.
 | G14 | Moving legal references: CPP renumbering on 1 Jan. 2029 (ordonnance 2025-1091); Ley 527 art. 10 cites the repealed CPC | FR-P14, CO-L1 | Cite with the version date | Concordance table on this page | Counsel |
 | G15 | Scope: no imaging, live, cloud or mobile acquisition | ISO-11 | Declared; use dedicated acquisition tools | — | Examiner |
 | G16 | No ANSSI PRIS qualification (market positioning, not admissibility) | §5.5 | — | Optional roadmap item | Firm |
-| G17 | Source access offered without a defined protocol; the Rakvor Source-Auditable Licence is a draft pending legal review | CO-P17, FR-P11, CO-C5 | Provide the exact tagged source on request | Standard NDA and inspection protocol (escrow or supervised review); finalise the licence | Firm + Counsel |
+| G17 | Source access offered without a defined protocol; the licence wording (PolyForm Noncommercial 1.0.0 with Rakvor's Required Notice, and COMMERCIAL.md) is a draft pending legal review | CO-P17, FR-P11, CO-C5 | Provide the exact tagged source on request | Standard NDA and inspection protocol (escrow or supervised review); finalise the licence | Firm + Counsel |
 | G18 | `verify-log` / `verify-case` check the token's imprint, status, file digest and TSA CMS signature; the TSA certificate chain only with `verify-log --tsa-ca`; **not** revocation, policy or accuracy | EU-4, CO-L9 | `verify-log --tsa-ca <TSA roots>`; revocation from CRL/OCSP evidence covering genTime (`rv-certcheck analyze --crl/--ocsp`, or `openssl verify -crl_check` with that CRL; `openssl ts -verify` alone does not check it) (checklist step 9) | Offline CRL/OCSP checking of the TSA certificate | Eng. |
 | G19 | Re-verification of the run's outputs against the digests in the audit log — **closed**: `verify-log` and `verify-case` re-hash every file the audit log records (item reports, `output_written` files, statistics, `hashes.csv`, `environment.json`, a creation run's `report.json`/`report.txt`) with every recorded algorithm; an edited, deleted or replaced output, or a recorded path leading outside the run folder, is a problem (exit 3) named in the output ([src/core/src/outputs.rs](../src/core/src/outputs.rs)). Files a creation run wrote at paths the operator chose (`file_written`: keys, certificates, CA files) are listed as not re-hashed (the CA folder is checked by `pki verify` against `issued.jsonl`); files the run never recorded are not checked; kept for numbering | — | — | — | — |
 | G20 | Truncation of a run's `audit.jsonl` (entries removed from the end) is detectable only against a record kept outside the log. `verify-log` now checks the RFC 3161 timestamp (`covers_seq`) and, for a run in a case folder, the head recorded at `run_finished` in the case log, and reports which entries are anchored. Residual: a standalone run without a timestamp prints `truncation not detectable without a timestamp or case record`; the 3 entries written after a standalone run's timestamp are reported as not provable | ISO-1, CO-P5 | Timestamp every run (or run with `--case-dir`); keep the head printed in the statistics report with the case file | Optional final timestamp after `run_finished` for standalone runs | Eng. |
