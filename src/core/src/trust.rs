@@ -205,7 +205,9 @@ fn parse_tst_info(der: &[u8]) -> Result<TstFields, String> {
 
 /// genTime of a TSTInfo as ISO 8601 UTC. RFC 3161 §2.4.2: a GeneralizedTime `YYYYMMDDhhmmss[.f…]Z` (seconds
 /// present, optional fraction, UTC). Checked on the bytes before any text is made of them (SEC-HI-01: a slice of a
-/// non-ASCII value used to panic); anything else is an error. Trailing zeros in the fraction are tolerated.
+/// non-ASCII value used to panic); anything else is an error. Trailing zeros in the fraction are tolerated. The date
+/// must exist in the proleptic Gregorian calendar: year 0001 or later, and a day that the month has (29 February
+/// only in a leap year), so `20260230…` or year `0000` is an error.
 fn gen_time_of(raw: &[u8]) -> Result<String, String> {
     let bad = || "bad genTime (not a GeneralizedTime YYYYMMDDhhmmss[.fff]Z)".to_string();
     let (Some(digits), Some(rest)) = (raw.get(..14), raw.get(14..)) else {
@@ -220,13 +222,17 @@ fn gen_time_of(raw: &[u8]) -> Result<String, String> {
         _ => return Err(bad()),
     }
     let n = |i: usize| u32::from(digits[i] - b'0') * 10 + u32::from(digits[i + 1] - b'0');
-    let (month, day, hour, minute, second) = (n(4), n(6), n(8), n(10), n(12));
-    if !(1..=12).contains(&month)
-        || !(1..=31).contains(&day)
-        || hour > 23
-        || minute > 59
-        || second > 60
-    {
+    let (year, month, day, hour, minute, second) =
+        (n(0) * 100 + n(2), n(4), n(6), n(8), n(10), n(12));
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days_in_month = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => 0, // no such month: no day is valid
+    };
+    if year == 0 || !(1..=days_in_month).contains(&day) || hour > 23 || minute > 59 || second > 60 {
         return Err(bad());
     }
     // Only ASCII digits from here on: every byte index below is a character boundary.
@@ -1615,12 +1621,31 @@ mod tests {
             "20261124240000Z",
             "20261124126000Z",
             "20261124120061Z",
+            // Dates that do not exist (Codex on rakvor-tool-forge#24): 30 February, 29 February of a common year
+            // (2025, and 1900: a century that is not a multiple of 400), 31 April, year 0000.
+            "20260230120000Z",
+            "20250229120000Z",
+            "19000229120000Z",
+            "20260431120000Z",
+            "00001124120000Z",
+            "00000101000000Z",
         ] {
             let r = ok(bad.as_bytes());
             assert!(
                 r.as_ref().is_err_and(|e| e.starts_with("bad genTime")),
                 "{bad:?}: {r:?}"
             );
+        }
+        // Leap days that exist (2024; 2000 is a multiple of 400), month ends, and the first possible year.
+        for (good, iso) in [
+            ("20240229120000Z", "2024-02-29T12:00:00Z"),
+            ("20000229000000Z", "2000-02-29T00:00:00Z"),
+            ("20260228235959Z", "2026-02-28T23:59:59Z"),
+            ("20260430120000Z", "2026-04-30T12:00:00Z"),
+            ("20261231120000Z", "2026-12-31T12:00:00Z"),
+            ("00010101000000Z", "0001-01-01T00:00:00Z"),
+        ] {
+            assert_eq!(ok(good.as_bytes()), Ok(iso.to_string()), "{good}");
         }
         // A genTime whose DER length runs past the end of the TSTInfo (or of the input) is a DER error.
         let mut tst = crafted_tst_info(&d, b"20261124120000Z", None);
