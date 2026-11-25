@@ -5,6 +5,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Entries are generated from
 [Conventional Commits](https://www.conventionalcommits.org/) by release-please and reviewed by a human.
 
+## [0.3.2](https://github.com/Panacota96/rv-certcheck/compare/v0.3.1...v0.3.2) (2026-11-25)
+
+
+### Bug Fixes
+
+* **trust:** accept leap seconds only at 23:59:60; test imprint and nonce bounds ([#29](https://github.com/Panacota96/rv-certcheck/issues/29)) ([0d256d7](https://github.com/Panacota96/rv-certcheck/commit/0d256d787bdebdc789d9f618bd0cd711e9382091))
+* **trust:** reject malformed timestamp times instead of panicking; require the nonce ([#26](https://github.com/Panacota96/rv-certcheck/issues/26)) ([ebd0f65](https://github.com/Panacota96/rv-certcheck/commit/ebd0f65d5ad35bdca3f25a192ce88be54d7b5d2b))
+
 ## [0.3.1](https://github.com/Panacota96/rv-certcheck/compare/v0.3.0...v0.3.1) (2026-11-24)
 
 
