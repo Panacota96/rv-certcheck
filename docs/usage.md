@@ -4,6 +4,7 @@ This is the end-to-end guide for an examiner. It walks through one case, explain
 each finding, and how to show afterwards that nothing changed; then it covers the creation side. Option lists are
 not repeated here:
 
+- the common tasks in short: [quick-guide.md](quick-guide.md);
 - every command, option, default, example and exit code: [usage-cli.md](usage-cli.md) (generated from `--help`);
 - the desktop app: [usage-gui.md](usage-gui.md);
 - Rakvor's own PKI step by step: [company-pki.md](company-pki.md);
