@@ -2,6 +2,8 @@
 
 # RV CertCheck
 
+**English** · [Español](README.es.md) · [Français](README.fr.md)
+
 <!-- forge:description -->
 **Certificate analyzer and creator.** Validates X.509 certificates and chains, revocation, timestamps and trust lists, and creates Rakvor's own PKI, lab certificate sets and CSRs.
 <!-- /forge:description -->
@@ -91,6 +93,7 @@ rv-certcheck verify-case E:\CASE-014
 rv-certcheck verify-log rakvor-out\logs\<RUN-ID>
 ```
 
+The common tasks, step by step: [docs/quick-guide.md](docs/quick-guide.md).
 The ready-made lab sample and what each file must report: [examples/](examples/README.md).
 
 ## Quick start: the company PKI
@@ -159,6 +162,7 @@ it never registers evidence) and its main verb is `analyze`.
 
 | Page | For |
 | --- | --- |
+| [docs/quick-guide.md](docs/quick-guide.md) | The six common tasks (analyze, case folder, verify-log, verify-case, timestamp, lab make), every GUI button, exit codes |
 | [docs/usage.md](docs/usage.md) | Walkthrough: analysing certificate evidence, reading every output, creation runs, troubleshooting |
 | [docs/theory.md](docs/theory.md) | Plain-language part (certificates, chains, revocation, timestamps) and expert part (RFC 5280 path validation as OpenSSL implements it, freshness rules, RFC 3161, thresholds, trust lists, PKI creation) |
 | [docs/admissibility.md](docs/admissibility.md) | Colombia, France/EU, ISO/IEC, US/UK requirements mapped to the tool, limits, gap list, examiner checklist (draft pending legal review) |
@@ -173,6 +177,9 @@ it never registers evidence) and its main verb is `analyze`.
 | [docs/development.md](docs/development.md) | Building, testing, CI/CD and releasing |
 | [docs/adr/](docs/adr/0001-language.md) | Architecture decisions (language) |
 
+The README, the quick guide, the usage guide, the desktop-app guide and the installation guide also exist in Spanish
+(`.es.md`) and French (`.fr.md`); the English pages are the reference.
+
 ## Project layout
 
 ```text
@@ -186,6 +193,7 @@ rv-certcheck/
 ├── schemas/       JSON Schemas (reports, case folder, Colombian trust-list row)
 ├── templates/     HTML report templates
 ├── tests/         independent oracles (OpenSSL CLI fixtures, Python cryptography), golden case, verifiers
+├── scripts/       docs checks (translations keep the shape of the English pages)
 ├── examples/      lab sample made with the OpenSSL CLI + expected findings and hashes
 └── packaging/     Windows installer, Rakvor code-signing root
 ```

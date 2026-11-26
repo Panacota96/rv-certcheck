@@ -26,6 +26,8 @@ jobs:
         run: rustup toolchain install && rustc --version
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
+      - name: Translated docs keep the shape of the English pages (headings, steps, code blocks, tables)
+        run: python3 -I scripts/check_doc_parity.py
       - name: Dependency advisories, licences and sources (cargo-deny; no GPL/AGPL/LGPL; see deny.toml)
         uses: EmbarkStudios/cargo-deny-action@v2
         with:

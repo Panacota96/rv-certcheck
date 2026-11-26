@@ -281,14 +281,20 @@ EXAMPLES:
     --lang es --case CASE-2026-014
   Against the EU trust list snapshot imported earlier (rv-certcheck trust-list import):
     rv-certcheck analyze -i D:\evidence --anchor tl:eu@latest
+  The files listed in a text file, against the bundled Rakvor root, machine-readable progress:
+    rv-certcheck analyze --input-list files.txt --anchor rakvor --progress jsonl > events.jsonl
   Verify the audit log afterwards:
-    rv-certcheck verify-log rakvor-out/logs/<RUN-ID>/audit.jsonl
+    rv-certcheck verify-log rakvor-out/logs/20261019T101500Z-a1b2c3
   Analyze the evidence registered in a case folder (intake by rv-hashinv), then verify the whole
   case:
     rv-certcheck analyze --case-dir E:\CASE-014 --anchor roots/ca-root.pem
     rv-certcheck verify-case E:\CASE-014
   Re-examine two registered items of the case:
     rv-certcheck analyze --case-dir E:\CASE-014 --evidence E0001,E0002
+  Offline lab: no timestamp request now; add it later with `rv-certcheck timestamp <LOG>`:
+    rv-certcheck analyze -i D:\evidence -r --anchor roots/ca-root.pem --no-timestamp
+  The summary starts with DONE, "DONE (high-severity findings)" (exit code 3) or CANCELLED,
+  then gives the counts, the timestamp status and the report and log folders.
 
 EXIT CODES:
   0    Completed; no high-severity finding.
@@ -401,20 +407,26 @@ DESCRIPTION:
   (profile client-internal) wait for Rakvor's CP/CPS reviewed by the lawyer (rv-certcheck#2).
 
 EXAMPLES:
-  Offline root on a YubiKey (key ceremony: docs/company-pki.md), then an intermediate in a file:
+  A root whose key is an encrypted file (password from RV_KEY_PASSWORD), then an intermediate:
     rv-certcheck pki init-root --ca E:\pki\root --ca-id rakvor-root-2026 --subject
-    "C=CO,O=Rakvor,CN=Rakvor Root CA 2026" \
-      --key-type p-384 --pkcs11-module "C:\Program Files\Yubico\Yubico PIV Tool\bin\libykcs11.dll" \
-      --token-serial 0012345678 --pin-env YUBIKEY_PIN --confirm-root
-    rv-certcheck pki issue --ca E:\pki\root --ca-pass-env YUBIKEY_PIN --profile intermediate \
-      --subject "C=CO,O=Rakvor,CN=Rakvor Issuing CA 2026" --key-type p-384 --key-file
-      E:\pki\issuing.key.p8
-  Examiner certificate for signing reports (rv-hashinv --sign-cert):
+    "C=CO,O=Rakvor,CN=Rakvor Root CA 2026" --key-type p-384
+    rv-certcheck pki issue --ca E:\pki\root --profile intermediate --subject
+    "C=CO,O=Rakvor,CN=Rakvor Issuing CA 2026" --key-type p-384 --key-file E:\pki\issuing.key.p8
+  The real offline root goes on a YubiKey (key ceremony: docs/company-pki.md):
+    rv-certcheck pki init-root --ca E:\pki\root-token --ca-id rakvor-root-2026 --subject
+    "C=CO,O=Rakvor,CN=Rakvor Root CA 2026" --key-type p-384 --pkcs11-module "C:\Program
+    Files\Yubico\Yubico PIV Tool\bin\libykcs11.dll" --token-serial 0012345678 --pin-env YUBIKEY_PIN
+    --confirm-root
+  Manage the intermediate as its own CA folder (its certificate is certs/<SERIAL>.crt of the root):
+    rv-certcheck pki import --ca E:\pki\issuing --ca-id rakvor-issuing-2026 --cert
+    E:\pki\root\certs\5f3a09c1.crt --issuer-cert E:\pki\root\certs\ca.crt --key-file
+    E:\pki\issuing.key.p8
+  Examiner certificate for signing reports (rv-hashinv --sign-cert), with its .p12
+  (RV_P12_PASSWORD):
     rv-certcheck pki issue --ca E:\pki\issuing --profile examiner --subject "C=CO,O=Rakvor,CN=Ana
-    Ruiz" \
-      --san email:ana.ruiz@rakvor.co --key-type rsa-3072
-  Revoke, then publish a CRL:
-    rv-certcheck pki revoke --ca E:\pki\issuing --serial 5f3a09c1... --reason keyCompromise
+    Ruiz" --san email:ana.ruiz@rakvor.example --key-file E:\pki\ana-ruiz.key.p8
+  Revoke it (the serial as `pki show` prints it), then publish a CRL:
+    rv-certcheck pki revoke --ca E:\pki\issuing --serial 5f3a09c1 --reason keyCompromise
     rv-certcheck pki crl --ca E:\pki\issuing
   Check a CA folder:
     rv-certcheck pki verify --ca E:\pki\issuing
@@ -531,6 +543,12 @@ Options:
   -h, --help
           Print help (see a summary with '-h')
 
+EXAMPLES:
+  A root CA in a new folder, its key in an encrypted file (password from RV_KEY_PASSWORD):
+    rv-certcheck pki init-root --ca E:\pki\root-2027 --ca-id rakvor-root-2027 --subject
+    "C=CO,O=Rakvor,CN=Rakvor Root CA 2027" --validity-days 3650 --actor "Ana Ruiz"
+  The output names the CA folder, the certificate, its SHA-256 and where the key is.
+
 EXIT CODES:
   0  Done.
   1  Runtime error (file not readable, wrong password or PIN, token or crypto failure). Audited.
@@ -639,6 +657,12 @@ Options:
 
   -h, --help
           Print help (see a summary with '-h')
+
+EXAMPLES:
+  An intermediate issued by the root, with its encrypted key file, in a new CA folder:
+    rv-certcheck pki import --ca E:\pki\issuing-copy --ca-id rakvor-issuing-copy --cert
+    E:\pki\root\certs\5f3a09c1.crt --issuer-cert E:\pki\root\certs\ca.crt --key-file
+    E:\pki\issuing.key.p8
 
 EXIT CODES:
   0  Done.
@@ -796,6 +820,13 @@ PROFILES:
   tls-server    digitalSignature (+keyEncipherment for RSA), EKU serverAuth, at least one dns:/ip:
   SAN.
 
+EXAMPLES:
+  An internal TLS server certificate from the issuing CA (CA key password from RV_CA_PASSWORD):
+    rv-certcheck pki issue --ca E:\pki\issuing --profile tls-server --subject
+    "C=CO,O=Rakvor,CN=hub.rakvor.local" --san dns:hub.rakvor.local --key-file E:\pki\hub.key.p8
+    --validity-days 365
+  The output gives the serial, the validity, the certificate file and its SHA-256.
+
 EXIT CODES:
   0  Done.
   1  Runtime error (file not readable, wrong password or PIN, token or crypto failure). Audited.
@@ -864,6 +895,11 @@ Options:
   -h, --help
           Print help (see a summary with '-h')
 
+EXAMPLES:
+  Revoke a certificate superseded by a new one, at a given time:
+    rv-certcheck pki revoke --ca E:\pki\issuing --serial 5f3a09c1 --reason superseded --at
+    2026-11-02T09:00:00Z
+
 EXIT CODES:
   0  Done.
   1  Runtime error (file not readable, wrong password or PIN, token or crypto failure). Audited.
@@ -929,6 +965,10 @@ Options:
 
   -h, --help
           Print help (see a summary with '-h')
+
+EXAMPLES:
+  A CRL valid for 7 days (CA key password from RV_CA_PASSWORD):
+    rv-certcheck pki crl --ca E:\pki\issuing --next-update-days 7
 
 EXIT CODES:
   0  Done.
@@ -1006,6 +1046,11 @@ Options:
   -h, --help
           Print help (see a summary with '-h')
 
+EXAMPLES:
+  An OCSP response for one serial, for analyze --ocsp:
+    rv-certcheck pki ocsp-sign --ca E:\pki\issuing --serial 5f3a09c1 --ocsp-out hub.ocsp
+    --next-update-days 7
+
 EXIT CODES:
   0  Done.
   1  Runtime error (file not readable, wrong password or PIN, token or crypto failure). Audited.
@@ -1056,6 +1101,12 @@ Options:
 
   -h, --help
           Print help (see a summary with '-h')
+
+EXAMPLES:
+  The CA and every certificate it issued (serial, subject, revocation):
+    rv-certcheck pki show --ca E:\pki\issuing
+  The same as JSON:
+    rv-certcheck pki show --ca E:\pki\issuing --json
 
 EXIT CODES:
   0  Done.
@@ -1115,6 +1166,10 @@ Options:
   -h, --help
           Print help (see a summary with '-h')
 
+EXAMPLES:
+  Write this CRL URL into every certificate issued from now on:
+    rv-certcheck pki set --ca E:\pki\issuing --crl-url http://pki.rakvor.example/issuing-2026.crl
+
 EXIT CODES:
   0  Done.
   1  Runtime error (file not readable, wrong password or PIN, token or crypto failure). Audited.
@@ -1167,6 +1222,10 @@ Options:
   -h, --help
           Print help (see a summary with '-h')
 
+EXAMPLES:
+  Check the issued.jsonl hash chain and every recorded file of a CA folder:
+    rv-certcheck pki verify --ca E:\pki\root
+
 EXIT CODES:
   0  Done.
   1  Runtime error (file not readable, wrong password or PIN, token or crypto failure). Audited.
@@ -1199,7 +1258,13 @@ Commands:
 
 Options:
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
+
+EXAMPLES:
+  A key and a CSR for a public CA, then check the CSR:
+    rv-certcheck csr new --subject "C=CO,O=Rakvor SAS,CN=hub.rakvor.example" --san
+    dns:hub.rakvor.example --csr-out hub.csr
+    rv-certcheck csr show hub.csr
 ```
 
 ### rv-certcheck csr new
@@ -1290,11 +1355,13 @@ Options:
           Print help (see a summary with '-h')
 
 EXAMPLES:
-  rv-certcheck csr new --subject "C=CO,O=Rakvor SAS,CN=www.rakvor.co" --san dns:www.rakvor.co
-  --key-type p-256 --csr-out www.csr
+  A key in an encrypted file (www.csr.key.p8, password from RV_KEY_PASSWORD) and its CSR for a
+  public CA:
+    rv-certcheck csr new --subject "C=CO,O=Rakvor SAS,CN=www.rakvor.example" --san
+    dns:www.rakvor.example --key-type p-256 --csr-out www.csr
   Key on a YubiKey (qualified CAs often require it):
-    rv-certcheck csr new --subject "C=CO,CN=Ana Ruiz,serialNumber=CC79123456" --csr-out ana.csr \
-      --pkcs11-module libykcs11.so --token-serial 0012345678 --pin-env YUBIKEY_PIN
+    rv-certcheck csr new --subject "C=CO,CN=Ana Ruiz,serialNumber=CC00000000" --csr-out ana.csr
+    --pkcs11-module libykcs11.so --token-serial 0012345678 --pin-env YUBIKEY_PIN
 
 EXIT CODES:
   0  Done.
@@ -1348,6 +1415,10 @@ Options:
   -h, --help
           Print help (see a summary with '-h')
 
+EXAMPLES:
+  Show the subject, key and SANs of a CSR and check its self-signature:
+    rv-certcheck csr show www.csr
+
 EXIT CODES:
   0  Done.
   1  Runtime error (file not readable, wrong password or PIN, token or crypto failure). Audited.
@@ -1379,7 +1450,11 @@ Commands:
 
 Options:
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
+
+EXAMPLES:
+  A minimal lab set (valid chain, expired, revoked by CRL, key mismatch) with its expected findings:
+    rv-certcheck lab make --set minimal --seed 3 --lab-out lab-min-3
 ```
 
 ### rv-certcheck lab make
@@ -1436,8 +1511,10 @@ CASES (full): valid-chain, expired, not-yet-valid, revoked-by-crl, revoked-by-oc
   forbidden finding codes and the code `openssl verify` gives at the base time.
 
 EXAMPLES:
-  rv-certcheck lab make --set full --seed 1 --lab-out lab-full-1
-  rv-certcheck lab make --set minimal --seed 7 --base-time 2027-06-01 --lab-out lab-min-7
+  The full set (13 cases), seed 1:
+    rv-certcheck lab make --set full --seed 1 --lab-out lab-full-1
+  The minimal set with another seed and base time:
+    rv-certcheck lab make --set minimal --seed 7 --base-time 2027-06-01 --lab-out lab-min-7
 
 EXIT CODES:
   0  Done.
@@ -1474,7 +1551,11 @@ Commands:
 
 Options:
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
+
+EXAMPLES:
+  Does this encrypted key belong to this certificate (exit 0 yes, 3 no)?
+    rv-certcheck keys match E:\pki\hub.key.p8 E:\pki\issuing\certs\5f3a09c1.crt
 ```
 
 ### rv-certcheck keys match
@@ -1520,6 +1601,10 @@ Options:
   -h, --help
           Print help (see a summary with '-h')
 
+EXAMPLES:
+  Does this encrypted key (password from RV_KEY_PASSWORD) belong to this certificate?
+    rv-certcheck keys match E:\pki\hub.key.p8 E:\pki\issuing\certs\5f3a09c1.crt
+
 EXIT CODES:
   0  The key belongs to the certificate.
   1  Runtime error (unreadable file, wrong password, not implemented in this build).
@@ -1547,7 +1632,12 @@ Commands:
 
 Options:
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
+
+EXAMPLES:
+  The tokens a YubiKey module sees (needs the token: no PIN for the list of slots and tokens):
+    rv-certcheck tokens list --pkcs11-module "C:\Program Files\Yubico\Yubico PIV
+    Tool\bin\libykcs11.dll"
 ```
 
 ### rv-certcheck tokens list
@@ -1594,10 +1684,12 @@ Options:
           Print help (see a summary with '-h')
 
 EXAMPLES:
-  rv-certcheck tokens list --pkcs11-module "C:\Program Files\Yubico\Yubico PIV
-  Tool\bin\libykcs11.dll"
-  rv-certcheck tokens list --pkcs11-module /usr/lib/softhsm/libsofthsm2.so --token-serial
-  7e29d86a112d890d --pin-env SOFTHSM_PIN
+  The slots and tokens of a YubiKey (no PIN needed):
+    rv-certcheck tokens list --pkcs11-module "C:\Program Files\Yubico\Yubico PIV
+    Tool\bin\libykcs11.dll"
+  The keys of one SoftHSM2 token (PIN from SOFTHSM_PIN):
+    rv-certcheck tokens list --pkcs11-module /usr/lib/softhsm/libsofthsm2.so --token-serial
+    7e29d86a112d890d --pin-env SOFTHSM_PIN
 
 EXIT CODES:
   0  Done.
@@ -1632,7 +1724,12 @@ Commands:
 
 Options:
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
+
+EXAMPLES:
+  Import a national EU trusted list as a dated snapshot, then list the snapshots:
+    rv-certcheck trust-list import --list eu D:\trust\TL-FR.xml
+    rv-certcheck trust-list list
 ```
 
 ### rv-certcheck trust-list import
@@ -1681,6 +1778,12 @@ Options:
 
   -h, --help
           Print help (see a summary with '-h')
+
+EXAMPLES:
+  A national EU trusted list (ETSI TS 119 612 XML):
+    rv-certcheck trust-list import --list eu D:\trust\TL-ES.xml
+  Rakvor's curated CSV of the Colombian ECDs, into a chosen snapshot folder:
+    rv-certcheck trust-list import --list co D:\trust\co-ecd.csv --store D:\trust-snapshots
 
 TRUST LISTS:
   A snapshot is used with analyze --anchor tl:eu@ID / tl:co@ID (latest = newest). Only the
@@ -1739,6 +1842,12 @@ Options:
 
   -h, --help
           Print help (see a summary with '-h')
+
+EXAMPLES:
+  Every snapshot in the tool's data folder (RV_CERTCHECK_DATA overrides it):
+    rv-certcheck trust-list list
+  Those of another snapshot folder:
+    rv-certcheck trust-list list --store D:\trust-snapshots
 
 TRUST LISTS:
   A snapshot is used with analyze --anchor tl:eu@ID / tl:co@ID (latest = newest). Only the
@@ -1809,6 +1918,10 @@ Options:
 
   -h, --help
           Print help (see a summary with '-h')
+
+EXAMPLES:
+  The newest EU snapshot, with its services and their status history:
+    rv-certcheck trust-list show --list eu latest
 
 TRUST LISTS:
   A snapshot is used with analyze --anchor tl:eu@ID / tl:co@ID (latest = newest). Only the
@@ -1890,10 +2003,15 @@ CHECKS:
     M recorded (algorithms)".
 
 EXAMPLES:
-  rv-certcheck verify-log rakvor-out/logs/20261019T101500Z-a1b2c3/audit.jsonl
-  rv-certcheck verify-log rakvor-out/logs/20261019T101500Z-a1b2c3
-  rv-certcheck verify-log E:\CASE-014\runs\rv-certcheck\20261019T101500Z-a1b2c3\logs
-  rv-certcheck verify-log rakvor-out/logs/20261019T101500Z-a1b2c3 --tsa-ca digicert-tsa-roots.pem
+  Verify a standalone run (its log folder, or the audit.jsonl in it):
+    rv-certcheck verify-log rakvor-out/logs/20261019T101500Z-a1b2c3
+    rv-certcheck verify-log rakvor-out/logs/20261019T101500Z-a1b2c3/audit.jsonl
+  Verify a run inside a case folder:
+    rv-certcheck verify-log E:\CASE-014\runs\rv-certcheck\20261019T101500Z-a1b2c3\logs
+  Also validate the TSA certificate chain against the TSA's own root certificates:
+    rv-certcheck verify-log rakvor-out/logs/20261019T101500Z-a1b2c3 --tsa-ca digicert-tsa-roots.pem
+  An intact log prints "OK  <N> entries, chain intact", then the timestamp, truncation and
+  outputs lines; an altered one prints BROKEN and one line per problem (exit code 3).
 
 EXIT CODES:
   0  The chain is intact and agrees with its timestamps and case record (if any), and every
@@ -1919,7 +2037,8 @@ Options:
           Print help (see a summary with '-h')
 
 EXAMPLES:
-  rv-certcheck self-test
+  Check this build before casework (one PASS or FAIL line per algorithm):
+    rv-certcheck self-test
 
 EXIT CODES:
   0  All algorithms give the published answer for the input "abc".
@@ -1954,8 +2073,13 @@ Options:
           Print help (see a summary with '-h')
 
 EXAMPLES:
-  rv-certcheck timestamp rakvor-out/logs/20261019T101500Z-a1b2c3
-  rv-certcheck timestamp rakvor-out/logs/20261019T101500Z-a1b2c3 --tsa-url https://freetsa.org/tsr
+  The run was offline (timestamp_pending): add the timestamp once the network is back:
+    rv-certcheck timestamp rakvor-out/logs/20261019T101500Z-a1b2c3
+  Use another RFC 3161 authority:
+    rv-certcheck timestamp rakvor-out/logs/20261019T101500Z-a1b2c3 --tsa-url https://freetsa.org/tsr
+  Name the examiner in the new audit entry:
+    rv-certcheck timestamp rakvor-out/logs/20261019T101500Z-a1b2c3 --actor "Ana Ruiz"
+  Success prints "OK  timestamp <TIME> by <TSA> covers entry #<N>"; then run verify-log.
 
 EXIT CODES:
   0  Timestamp obtained and logged.
@@ -1998,8 +2122,12 @@ CHECKS:
     and its digests are compared with the registry (the latest registration of a path).
 
 EXAMPLES:
-  rv-certcheck verify-case E:\CASE-014
-  rv-certcheck verify-case E:\CASE-014 --rehash
+  Check the case log, the registry and every run of the case:
+    rv-certcheck verify-case E:\CASE-014
+  Also read every registered evidence file again and compare it with the registry:
+    rv-certcheck verify-case E:\CASE-014 --rehash
+  An intact case prints "OK  case <ID>: ..." and an outputs line; a failed check prints
+  BROKEN and one line per problem (exit code 3).
 
 EXIT CODES:
   0  The case folder is intact (warnings, e.g. a run still in progress or an item not
@@ -2037,8 +2165,10 @@ OFF SWITCH:
   %APPDATA%\Rakvor (RV Hub's setting), turns the check off for every Rakvor tool.
 
 EXAMPLES:
-  rv-certcheck update-check
-  rv-certcheck update-check --json
+  Ask whether a newer release is published (one line):
+    rv-certcheck update-check
+  The same answer as JSON, for scripts:
+    rv-certcheck update-check --json
 
 EXIT CODES:
   0  This is the latest release, or the check is turned off.
@@ -2072,7 +2202,8 @@ DESCRIPTION:
   exit_codes. Nothing is read or written; no audit log is created.
 
 EXAMPLES:
-  rv-certcheck describe --json
+  Print the description that RV Hub reads:
+    rv-certcheck describe --json
 
 EXIT CODES:
   0  The description was printed.

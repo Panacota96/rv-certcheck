@@ -58,13 +58,19 @@ EXAMPLES:
     rv-certcheck analyze -i D:\\evidence --anchor roots/ca-root.pem --crl ca.crl --ocsp leaf.ocsp --lang es --case CASE-2026-014
   Against the EU trust list snapshot imported earlier (rv-certcheck trust-list import):
     rv-certcheck analyze -i D:\\evidence --anchor tl:eu@latest
+  The files listed in a text file, against the bundled Rakvor root, machine-readable progress:
+    rv-certcheck analyze --input-list files.txt --anchor rakvor --progress jsonl > events.jsonl
   Verify the audit log afterwards:
-    rv-certcheck verify-log rakvor-out/logs/<RUN-ID>/audit.jsonl
+    rv-certcheck verify-log rakvor-out/logs/20261019T101500Z-a1b2c3
   Analyze the evidence registered in a case folder (intake by rv-hashinv), then verify the whole case:
     rv-certcheck analyze --case-dir E:\\CASE-014 --anchor roots/ca-root.pem
     rv-certcheck verify-case E:\\CASE-014
   Re-examine two registered items of the case:
     rv-certcheck analyze --case-dir E:\\CASE-014 --evidence E0001,E0002
+  Offline lab: no timestamp request now; add it later with `rv-certcheck timestamp <LOG>`:
+    rv-certcheck analyze -i D:\\evidence -r --anchor roots/ca-root.pem --no-timestamp
+  The summary starts with DONE, \"DONE (high-severity findings)\" (exit code 3) or CANCELLED,
+  then gives the counts, the timestamp status and the report and log folders.
 
 EXIT CODES:
   0    Completed; no high-severity finding.
@@ -137,19 +143,49 @@ enum Command {
     #[command(subcommand, after_long_help = commands::PKI_AFTER_HELP)]
     Pki(commands::PkiCommand),
     /// Certificate signing requests: new, show.
-    #[command(subcommand)]
+    #[command(
+        subcommand,
+        after_long_help = "EXAMPLES:
+  A key and a CSR for a public CA, then check the CSR:
+    rv-certcheck csr new --subject \"C=CO,O=Rakvor SAS,CN=hub.rakvor.example\" --san dns:hub.rakvor.example --csr-out hub.csr
+    rv-certcheck csr show hub.csr"
+    )]
     Csr(commands::CsrCommand),
     /// Reproducible lab and test certificate sets.
-    #[command(subcommand)]
+    #[command(
+        subcommand,
+        after_long_help = "EXAMPLES:
+  A minimal lab set (valid chain, expired, revoked by CRL, key mismatch) with its expected findings:
+    rv-certcheck lab make --set minimal --seed 3 --lab-out lab-min-3"
+    )]
     Lab(commands::LabCommand),
     /// Private keys: match a key with a certificate.
-    #[command(subcommand)]
+    #[command(
+        subcommand,
+        after_long_help = "EXAMPLES:
+  Does this encrypted key belong to this certificate (exit 0 yes, 3 no)?
+    rv-certcheck keys match E:\\pki\\hub.key.p8 E:\\pki\\issuing\\certs\\5f3a09c1.crt"
+    )]
     Keys(commands::KeysCommand),
     /// PKCS#11 hardware tokens: list slots, tokens and keys.
-    #[command(subcommand)]
+    #[command(
+        subcommand,
+        after_long_help = "\
+EXAMPLES:
+  The tokens a YubiKey module sees (needs the token: no PIN for the list of slots and tokens):
+    rv-certcheck tokens list --pkcs11-module \"C:\\Program Files\\Yubico\\Yubico PIV Tool\\bin\\libykcs11.dll\""
+    )]
     Tokens(commands::TokensCommand),
     /// EU and Colombian trust lists: import, list, show dated snapshots.
-    #[command(subcommand, name = "trust-list")]
+    #[command(
+        subcommand,
+        name = "trust-list",
+        after_long_help = "\
+EXAMPLES:
+  Import a national EU trusted list as a dated snapshot, then list the snapshots:
+    rv-certcheck trust-list import --list eu D:\\trust\\TL-FR.xml
+    rv-certcheck trust-list list"
+    )]
     TrustList(commands::TrustListCommand),
     /// Verify an audit log (audit.jsonl): edited, deleted or re-ordered entries, and truncation.
     #[command(after_long_help = "\
@@ -184,10 +220,15 @@ CHECKS:
     M recorded (algorithms)\".
 
 EXAMPLES:
-  rv-certcheck verify-log rakvor-out/logs/20261019T101500Z-a1b2c3/audit.jsonl
-  rv-certcheck verify-log rakvor-out/logs/20261019T101500Z-a1b2c3
-  rv-certcheck verify-log E:\\CASE-014\\runs\\rv-certcheck\\20261019T101500Z-a1b2c3\\logs
-  rv-certcheck verify-log rakvor-out/logs/20261019T101500Z-a1b2c3 --tsa-ca digicert-tsa-roots.pem
+  Verify a standalone run (its log folder, or the audit.jsonl in it):
+    rv-certcheck verify-log rakvor-out/logs/20261019T101500Z-a1b2c3
+    rv-certcheck verify-log rakvor-out/logs/20261019T101500Z-a1b2c3/audit.jsonl
+  Verify a run inside a case folder:
+    rv-certcheck verify-log E:\\CASE-014\\runs\\rv-certcheck\\20261019T101500Z-a1b2c3\\logs
+  Also validate the TSA certificate chain against the TSA's own root certificates:
+    rv-certcheck verify-log rakvor-out/logs/20261019T101500Z-a1b2c3 --tsa-ca digicert-tsa-roots.pem
+  An intact log prints \"OK  <N> entries, chain intact\", then the timestamp, truncation and
+  outputs lines; an altered one prints BROKEN and one line per problem (exit code 3).
 
 EXIT CODES:
   0  The chain is intact and agrees with its timestamps and case record (if any), and every
@@ -215,7 +256,8 @@ EXIT CODES:
     /// Check every hash algorithm against known-answer test vectors.
     #[command(after_long_help = "\
 EXAMPLES:
-  rv-certcheck self-test
+  Check this build before casework (one PASS or FAIL line per algorithm):
+    rv-certcheck self-test
 
 EXIT CODES:
   0  All algorithms give the published answer for the input \"abc\".
@@ -224,8 +266,13 @@ EXIT CODES:
     /// Add an RFC 3161 timestamp to a finished run (e.g. after working offline).
     #[command(after_long_help = "\
 EXAMPLES:
-  rv-certcheck timestamp rakvor-out/logs/20261019T101500Z-a1b2c3
-  rv-certcheck timestamp rakvor-out/logs/20261019T101500Z-a1b2c3 --tsa-url https://freetsa.org/tsr
+  The run was offline (timestamp_pending): add the timestamp once the network is back:
+    rv-certcheck timestamp rakvor-out/logs/20261019T101500Z-a1b2c3
+  Use another RFC 3161 authority:
+    rv-certcheck timestamp rakvor-out/logs/20261019T101500Z-a1b2c3 --tsa-url https://freetsa.org/tsr
+  Name the examiner in the new audit entry:
+    rv-certcheck timestamp rakvor-out/logs/20261019T101500Z-a1b2c3 --actor \"Ana Ruiz\"
+  Success prints \"OK  timestamp <TIME> by <TSA> covers entry #<N>\"; then run verify-log.
 
 EXIT CODES:
   0  Timestamp obtained and logged.
@@ -262,8 +309,12 @@ CHECKS:
     and its digests are compared with the registry (the latest registration of a path).
 
 EXAMPLES:
-  rv-certcheck verify-case E:\\CASE-014
-  rv-certcheck verify-case E:\\CASE-014 --rehash
+  Check the case log, the registry and every run of the case:
+    rv-certcheck verify-case E:\\CASE-014
+  Also read every registered evidence file again and compare it with the registry:
+    rv-certcheck verify-case E:\\CASE-014 --rehash
+  An intact case prints \"OK  case <ID>: ...\" and an outputs line; a failed check prints
+  BROKEN and one line per problem (exit code 3).
 
 EXIT CODES:
   0  The case folder is intact (warnings, e.g. a run still in progress or an item not
@@ -296,8 +347,10 @@ OFF SWITCH:
   %APPDATA%\\Rakvor (RV Hub's setting), turns the check off for every Rakvor tool.
 
 EXAMPLES:
-  rv-certcheck update-check
-  rv-certcheck update-check --json
+  Ask whether a newer release is published (one line):
+    rv-certcheck update-check
+  The same answer as JSON, for scripts:
+    rv-certcheck update-check --json
 
 EXIT CODES:
   0  This is the latest release, or the check is turned off.
@@ -311,7 +364,13 @@ EXIT CODES:
         json: bool,
     },
     /// Print the full help of every command as Markdown (used to generate docs/usage-cli.md).
-    #[command(hide = true)]
+    #[command(
+        hide = true,
+        after_long_help = "\
+EXAMPLES:
+  Regenerate the command-line reference:
+    rv-certcheck docs-cli > docs/usage-cli.md"
+    )]
     DocsCli,
     /// Describe this tool as JSON (schema rakvor.describe/1) for RV Hub and scripts.
     #[command(hide = true, after_long_help = DESCRIBE_AFTER_HELP)]
@@ -335,7 +394,8 @@ DESCRIPTION:
   exit_codes. Nothing is read or written; no audit log is created.
 
 EXAMPLES:
-  rv-certcheck describe --json
+  Print the description that RV Hub reads:
+    rv-certcheck describe --json
 
 EXIT CODES:
   0  The description was printed.";
@@ -1118,5 +1178,141 @@ fn update_check(json: bool) -> u8 {
         update::Check::Available { .. } => 3,
         update::Check::Failed { .. } => 1,
         update::Check::UpToDate { .. } | update::Check::Disabled { .. } => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The command lines listed under EXAMPLES: in a long help (lines that start with the tool name).
+    fn examples(help: &str) -> Vec<String> {
+        let Some(section) = help.split("EXAMPLES:\n").nth(1) else {
+            return vec![];
+        };
+        // Commands are indented by 4. clap wraps a long one onto further lines with the same indent (a longer
+        // tool name after scaffolding can push it past the width): those lines continue the command.
+        let prefix = format!("{} ", TOOL_NAME);
+        let mut out: Vec<String> = vec![];
+        let mut in_command = false;
+        for l in section
+            .lines()
+            .take_while(|l| l.is_empty() || l.starts_with(' '))
+        {
+            let t = l.trim();
+            if t.starts_with(&prefix) {
+                out.push(t.to_string());
+                in_command = true;
+            } else if in_command && l.starts_with("    ") && !t.is_empty() {
+                if let Some(last) = out.last_mut() {
+                    last.push(' ');
+                    last.push_str(t);
+                }
+            } else {
+                in_command = false;
+            }
+        }
+        out
+    }
+
+    /// Splits an example like a shell would for these simple lines: whitespace, "double quotes", and a final
+    /// `> FILE` redirection that is not an argument.
+    fn split_args(line: &str) -> Vec<String> {
+        let (mut args, mut cur, mut quoted, mut any) = (vec![], String::new(), false, false);
+        for c in line.chars() {
+            match c {
+                '"' => {
+                    quoted = !quoted;
+                    any = true;
+                }
+                c if c.is_whitespace() && !quoted => {
+                    if any {
+                        args.push(std::mem::take(&mut cur));
+                        any = false;
+                    }
+                }
+                c => {
+                    cur.push(c);
+                    any = true;
+                }
+            }
+        }
+        if any {
+            args.push(cur);
+        }
+        if let Some(i) = args.iter().position(|a| a == ">") {
+            args.truncate(i);
+        }
+        args
+    }
+
+    /// Every (sub)command below the root with its path of names: `["analyze"]`, `["pki", "issue"]`, …
+    fn commands(
+        cmd: &clap::Command,
+        path: Vec<String>,
+        out: &mut Vec<(Vec<String>, clap::Command)>,
+    ) {
+        for sub in cmd.get_subcommands().filter(|s| s.get_name() != "help") {
+            let mut p = path.clone();
+            p.push(sub.get_name().to_string());
+            out.push((p.clone(), sub.clone()));
+            commands(sub, p, out);
+        }
+    }
+
+    #[test]
+    fn every_subcommand_has_worked_examples_that_parse() {
+        let mut root = Cli::command().term_width(100);
+        root.build();
+        let mut all = vec![];
+        commands(&root, vec![], &mut all);
+        let mut checked = 0;
+        for (path, sub) in all {
+            let help = sub.clone().render_long_help().to_string();
+            let lines = examples(&help);
+            assert!(
+                lines
+                    .first()
+                    .is_some_and(|l| split_args(l).get(1..=path.len()) == Some(&path[..])),
+                "`{} {}` has no EXAMPLES of itself",
+                TOOL_NAME,
+                path.join(" ")
+            );
+            for line in lines {
+                let args = split_args(&line);
+                if let Err(e) = Cli::try_parse_from(&args) {
+                    panic!("example `{}` does not parse: {}", line, e);
+                }
+                checked += 1;
+            }
+        }
+        assert!(checked >= 25, "{} examples", checked);
+    }
+
+    /// tests/examples.rs runs the examples of every subcommand that docs-cli documents (visible ones and
+    /// `describe`, with their visible children) plus `docs-cli`; any other hidden subcommand would be only
+    /// parsed, so it must be added there.
+    #[test]
+    fn example_runner_sees_every_subcommand() {
+        let mut root = Cli::command();
+        root.build();
+        let mut all = vec![];
+        commands(&root, vec![], &mut all);
+        for (path, sub) in all {
+            let name = path.join(" ");
+            assert!(
+                !sub.is_hide_set() || name == "describe" || name == "docs-cli",
+                "hidden subcommand `{}`: run its examples in tests/examples.rs (or list it in PARSE_ONLY there)",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn split_args_handles_quotes_and_redirection() {
+        assert_eq!(
+            split_args(r#"rv-certcheck timestamp L --actor "Ana Ruiz" > out.txt"#),
+            ["rv-certcheck", "timestamp", "L", "--actor", "Ana Ruiz"]
+        );
     }
 }
